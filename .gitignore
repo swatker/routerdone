@@ -1,4 +1,4 @@
-﻿# RouterDone .gitignore
+# RouterDone .gitignore
 # Dependencies
 node_modules/
 .pnp
@@ -36,3 +36,7 @@ next-env.d.ts
 npm-debug.log*
 yarn-debug.log*
 .pnpm-debug.log*
+
+# Codekit agent artifacts (private, not for public repo)
+.agents/
+AGENTS.md

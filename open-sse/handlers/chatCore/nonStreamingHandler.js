@@ -8,6 +8,11 @@ import { parseSSEToOpenAIResponse } from "./sseToJsonHandler.js";
 import { buildRequestDetail, extractRequestConfig, extractUsageFromResponse, saveUsageStats } from "./requestDetail.js";
 import { appendRequestLog, saveRequestDetail } from "@/lib/usageDb.js";
 import { decloakToolNames } from "../../utils/claudeCloaking.js";
+function stripThinkingTags(text) {
+  if (typeof text !== "string") return text;
+  return text.replace(/<thinking>[\s\S]*?<\/thinking>/gi, "").trim();
+}
+
 
 /**
  * Translate non-streaming response body from provider format → OpenAI format.
@@ -197,6 +202,15 @@ export async function handleNonStreamingResponse({ providerResponse, provider, m
   const translatedResponse = needsTranslation(targetFormat, sourceFormat)
     ? translateNonStreamingResponse(responseBody, targetFormat, sourceFormat)
     : responseBody;
+
+  // Strip <thinking>...</thinking> blocks from content (some providers embed them in content)
+  if (translatedResponse?.choices) {
+    for (const choice of translatedResponse.choices) {
+      if (typeof choice?.message?.content === "string") {
+        choice.message.content = stripThinkingTags(choice.message.content);
+      }
+    }
+  }
 
   // Fix finish_reason for tool_calls: some providers return non-standard values (e.g. "other")
   if (translatedResponse?.choices?.[0]) {

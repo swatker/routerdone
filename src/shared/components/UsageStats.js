@@ -59,18 +59,28 @@ function RecentRequests({ requests = [] }) {
               </tr>
             </thead>
             <tbody className="divide-y divide-border/50">
+
               {requests.map((r, i) => {
-                const ok = !r.status || r.status === "ok" || r.status === "success";
+                const isPending = r.status === "PENDING" || r.status === "pending";
+                const ok = !r.status || r.status === "ok" || r.status === "success" || isPending;
+                const actualName = r.actualModel || r.model;
+                const actualModel = r.actualProvider && actualName ? `${r.actualProvider}/${actualName}` : actualName || r.provider || r.model;
                 return (
                   <tr key={i} className="hover:bg-bg-subtle transition-colors">
                     <td className="py-1.5">
                       <span className={`block w-1.5 h-1.5 rounded-full ${ok ? "bg-success" : "bg-error"}`} />
                     </td>
-                    <td className="py-1.5 font-mono truncate max-w-[120px]" title={r.model}>{r.model}</td>
+                    <td className="py-1.5 min-w-0 max-w-[170px] truncate font-mono text-text-main" title={[actualModel, r.comboRunId ? `run=${r.comboRunId}` : null].filter(Boolean).join(" | ")}>{actualName}</td>
                     <td className="py-1.5 text-right whitespace-nowrap">
-                      <span className="text-primary">{fmt(r.promptTokens)}↑</span>
-                      {" "}
-                      <span className="text-success">{fmt(r.completionTokens)}↓</span>
+                      {isPending ? (
+                        <span className="text-text-muted text-[10px] uppercase tracking-wide">Running</span>
+                      ) : (
+                        <>
+                          <span className="text-primary">{fmt(r.promptTokens)}↑</span>
+                          {" "}
+                          <span className="text-success">{fmt(r.completionTokens)}↓</span>
+                        </>
+                      )}
                     </td>
                     <td className="py-1.5 text-right text-text-muted whitespace-nowrap"><TimeAgo timestamp={r.timestamp} /></td>
                   </tr>

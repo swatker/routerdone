@@ -1,0 +1,57 @@
+diff --git a/open-sse/handlers/chatCore/nonStreamingHandler.js b/open-sse/handlers/chatCore/nonStreamingHandler.js
+index 140f378..06f86e7 100644
+--- a/open-sse/handlers/chatCore/nonStreamingHandler.js
++++ b/open-sse/handlers/chatCore/nonStreamingHandler.js
+@@ -9,6 +9,11 @@ import { buildRequestDetail, extractRequestConfig, extractUsageFromResponse, sav
+ import { appendRequestLog, saveRequestDetail } from "@/lib/usageDb.js";
+ import { decloakToolNames } from "../../utils/claudeCloaking.js";
+ 
++function stripThinkingTags(text) {
++  if (typeof text !== "string") return text;
++  return text.replace(/<thinking>[\s\S]*?<\/thinking>/gi, "").trim();
++}
++
+ /**
+  * Translate non-streaming response body from provider format → OpenAI format.
+  */
+@@ -222,6 +227,15 @@ export async function handleNonStreamingResponse({ providerResponse, provider, m
+   // Flatten array content (e.g. [{type:"output_text", text:"..."}]) → string
+   normalizeNonStreamingContent(translatedResponse);
+ 
++  // Strip <thinking>...</thinking> blocks from content (some providers embed them in content)
++  if (translatedResponse?.choices) {
++    for (const choice of translatedResponse.choices) {
++      if (typeof choice?.message?.content === "string") {
++        choice.message.content = stripThinkingTags(choice.message.content);
++      }
++    }
++  }
++
+   // Fix finish_reason for tool_calls: some providers return non-standard values (e.g. "other")
+   if (translatedResponse?.choices?.[0]) {
+     const choice = translatedResponse.choices[0];
+diff --git a/open-sse/handlers/chatCore/sseToJsonHandler.js b/open-sse/handlers/chatCore/sseToJsonHandler.js
+index bf68c1f..ab31a66 100644
+--- a/open-sse/handlers/chatCore/sseToJsonHandler.js
++++ b/open-sse/handlers/chatCore/sseToJsonHandler.js
+@@ -9,6 +9,11 @@ import { buildRequestDetail, extractRequestConfig, saveUsageStats } from "./requ
+ const isResponsesProvider = (p) => PROVIDERS[p]?.format === FORMATS.OPENAI_RESPONSES;
+ import { saveRequestDetail, appendRequestLog } from "@/lib/usageDb.js";
+ 
++function stripThinkingTags(text) {
++  if (typeof text !== "string") return text;
++  return text.replace(/<thinking>[\s\S]*?<\/thinking>/gi, "").trim();
++}
++
+ function textFromResponsesMessageItem(item) {
+   if (!item?.content || !Array.isArray(item.content)) return "";
+   const byType = item.content.find((c) => c.type === "output_text");
+@@ -85,7 +90,7 @@ export function parseSSEToOpenAIResponse(rawSSE, fallbackModel) {
+     }
+   }
+ 
+-  const message = { role: "assistant", content: contentParts.join("") || (toolCallMap.size > 0 ? null : "") };
++  const message = { role: "assistant", content: stripThinkingTags(contentParts.join("")) || (toolCallMap.size > 0 ? null : "") };
+   if (reasoningParts.length > 0) message.reasoning_content = reasoningParts.join("");
+   if (toolCallMap.size > 0) {
+     message.tool_calls = [...toolCallMap.entries()].sort((a, b) => a[0] - b[0]).map(([, tc]) => tc);

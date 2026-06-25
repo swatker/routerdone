@@ -1,0 +1,56 @@
+diff --git a/src/shared/components/UsageStats.js b/src/shared/components/UsageStats.js
+index fabb380..d6b0de3 100644
+--- a/src/shared/components/UsageStats.js
++++ b/src/shared/components/UsageStats.js
+@@ -37,7 +37,7 @@ function TimeAgo({ timestamp }) {
+   return <>{timeAgo(timestamp)}</>;
+ }
+ 
+-function RecentRequests({ requests = [], activeRequests = [] }) {
++function RecentRequests({ requests = [] }) {
+   return (
+     <Card className="flex min-w-0 flex-col overflow-hidden" padding="sm" style={{ height: 480 }}>
+       {/* Header */}
+@@ -45,7 +45,7 @@ function RecentRequests({ requests = [], activeRequests = [] }) {
+         <span className="text-xs font-semibold text-text-muted uppercase tracking-wide">Recent Requests</span>
+       </div>
+ 
+-      {!requests.length && !activeRequests.length ? (
++      {!requests.length ? (
+         <div className="flex-1 flex items-center justify-center text-text-muted text-sm">No requests yet.</div>
+       ) : (
+         <div className="flex-1 overflow-y-auto">
+@@ -59,23 +59,7 @@ function RecentRequests({ requests = [], activeRequests = [] }) {
+               </tr>
+             </thead>
+             <tbody className="divide-y divide-border/50">
+-              {activeRequests.map((r, i) => {
+-                const actualModel = r.model ? `${r.provider || "unknown"}/${r.model}` : (r.provider || "unknown");
+-                return (
+-                  <tr key={`active-${i}`} className="hover:bg-bg-subtle transition-colors">
+-                    <td className="py-1.5">
+-                      <span className="block w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
+-                    </td>
+-                    <td className="py-1.5 min-w-0 max-w-[170px] truncate font-mono text-text-main" title={[actualModel, r.account ? `account=${r.account}` : null].filter(Boolean).join(" | ")}>{r.model || "Running"}</td>
+-                    <td className="py-1.5 text-right whitespace-nowrap">
+-                      <span className="text-primary">0↑</span>
+-                      {" "}
+-                      <span className="text-success">0↓</span>
+-                    </td>
+-                    <td className="py-1.5 text-right text-text-muted whitespace-nowrap"><TimeAgo timestamp={r.timestamp} /></td>
+-                  </tr>
+-                );
+-              })}
++
+               {requests.map((r, i) => {
+                 const isPending = r.status === "PENDING" || r.status === "pending";
+                 const ok = !r.status || r.status === "ok" || r.status === "success" || isPending;
+@@ -491,7 +475,7 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
+             lastProvider={stats.recentRequests?.[0]?.provider || ""}
+             errorProvider={stats.errorProvider || ""}
+           />
+-          <RecentRequests requests={stats.recentRequests || []} activeRequests={stats.activeRequests || []} />
++          <RecentRequests requests={stats.recentRequests || []} />
+         </div>
+       )}
+ 

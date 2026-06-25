@@ -1,0 +1,120 @@
+diff --git a/src/lib/db/repos/usageRepo.js b/src/lib/db/repos/usageRepo.js
+index 5ec59ab..2a5ad86 100644
+--- a/src/lib/db/repos/usageRepo.js
++++ b/src/lib/db/repos/usageRepo.js
+@@ -109,6 +109,33 @@ function normalizeRecentRequest(entry) {
+     status: entry.status || "ok",
+   };
+ }
++
++function requestGroupKey(entry) {
++  if (entry.comboRunId) return `run:${entry.comboRunId}`;
++  const minute = entry.timestamp ? entry.timestamp.slice(0, 16) : "";
++  return `usage:${entry.promptTokens}|${entry.completionTokens}|${minute}`;
++}
++
++function preferRecentRequest(current, next) {
++  if (!current) return next;
++  const currentIsCombo = Boolean(current.comboName || current.requestedModel?.includes("fallback") || current.displayModel?.includes("fallback"));
++  const nextIsCombo = Boolean(next.comboName || next.requestedModel?.includes("fallback") || next.displayModel?.includes("fallback"));
++  if (nextIsCombo && !currentIsCombo) {
++    return { ...next, actualProvider: current.actualProvider || next.actualProvider, actualModel: current.actualModel || next.actualModel };
++  }
++  if (!nextIsCombo && currentIsCombo) {
++    return { ...current, actualProvider: next.actualProvider || current.actualProvider, actualModel: next.actualModel || current.actualModel };
++  }
++  return new Date(next.timestamp) > new Date(current.timestamp) ? next : current;
++}
++
++function collapseRecentRequests(entries) {
++  const groups = new Map();
++  for (const entry of entries) {
++    groups.set(requestGroupKey(entry), preferRecentRequest(groups.get(requestGroupKey(entry)), entry));
++  }
++  return [...groups.values()].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
++}
+ async function getConnectionMapCached() {
+   if (Date.now() - connCache.ts < CONN_CACHE_TTL_MS) return connCache.map;
+   try {
+@@ -241,17 +268,16 @@ export async function getActiveRequests() {
+ 
+   await ensureRingInitialized();
+   const seen = new Set();
+-  const recentRequests = [...recentRing.items]
++  const recentRequests = collapseRecentRequests([...recentRing.items]
+     .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+     .map(normalizeRecentRequest)
+     .filter((e) => {
+       if (e.promptTokens === 0 && e.completionTokens === 0) return false;
+-      const minute = e.timestamp ? e.timestamp.slice(0, 16) : "";
+-      const key = `${e.model}|${e.provider}|${e.promptTokens}|${e.completionTokens}|${e.comboRunId || ""}|${minute}`;
++      const key = requestGroupKey(e);
+       if (seen.has(key)) return false;
+       seen.add(key);
+       return true;
+-    })
++    }))
+     .slice(0, 20);
+ 
+   const errorProvider = (Date.now() - lastErrorProvider.ts < 10000) ? lastErrorProvider.provider : "";
+@@ -362,7 +388,7 @@ export async function getUsageStats(period = "all") {
+   // recentRequests from live history (last 100 entries enough for 20 deduped)
+   const recentRows = db.all(`SELECT timestamp, provider, model, tokens, status, meta FROM usageHistory ORDER BY id DESC LIMIT 100`);
+   const seen = new Set();
+-  const recentRequests = recentRows
++  const recentRequests = collapseRecentRequests(recentRows
+     .map((r) => normalizeRecentRequest({
+       timestamp: r.timestamp,
+       model: r.model,
+@@ -373,12 +399,11 @@ export async function getUsageStats(period = "all") {
+     }))
+     .filter((e) => {
+       if (e.promptTokens === 0 && e.completionTokens === 0) return false;
+-      const minute = e.timestamp ? e.timestamp.slice(0, 16) : "";
+-      const key = `${e.model}|${e.provider}|${e.promptTokens}|${e.completionTokens}|${e.comboRunId || ""}|${minute}`;
++      const key = requestGroupKey(e);
+       if (seen.has(key)) return false;
+       seen.add(key);
+       return true;
+-    })
++    }))
+     .slice(0, 20);
+ 
+   const stats = {
+diff --git a/src/shared/components/UsageStats.js b/src/shared/components/UsageStats.js
+index c807904..d27c117 100644
+--- a/src/shared/components/UsageStats.js
++++ b/src/shared/components/UsageStats.js
+@@ -66,10 +66,7 @@ function RecentRequests({ requests = [], activeRequests = [] }) {
+                     <td className="py-1.5">
+                       <span className="block w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
+                     </td>
+-                    <td className="py-1.5 min-w-0 max-w-[170px]" title={[r.model || "Running", actualModel, r.account ? `account=${r.account}` : null].filter(Boolean).join(" | ")}>
+-                      <div className="truncate font-mono text-text-main">{r.model || "Running"}</div>
+-                      <div className="truncate text-[10px] text-text-muted">{actualModel}</div>
+-                    </td>
++                    <td className="py-1.5 min-w-0 max-w-[170px] truncate font-mono text-text-main" title={[actualModel, r.account ? `account=${r.account}` : null].filter(Boolean).join(" | ")}>{r.model || "Running"}</td>
+                     <td className="py-1.5 text-right whitespace-nowrap">
+                       <span className="text-text-muted text-[10px] uppercase tracking-wide">Running</span>
+                     </td>
+@@ -80,17 +77,14 @@ function RecentRequests({ requests = [], activeRequests = [] }) {
+               {requests.map((r, i) => {
+                 const isPending = r.status === "PENDING" || r.status === "pending";
+                 const ok = !r.status || r.status === "ok" || r.status === "success" || isPending;
+-                const displayModel = r.displayModel || r.requestedModel || r.model;
+-                const actualModel = r.actualProvider && r.actualModel ? `${r.actualProvider}/${r.actualModel}` : r.actualModel || r.provider || r.model;
++                const actualName = r.actualModel || r.model;
++                const actualModel = r.actualProvider && actualName ? `${r.actualProvider}/${actualName}` : actualName || r.provider || r.model;
+                 return (
+                   <tr key={i} className="hover:bg-bg-subtle transition-colors">
+                     <td className="py-1.5">
+                       <span className={`block w-1.5 h-1.5 rounded-full ${ok ? "bg-success" : "bg-error"}`} />
+                     </td>
+-                    <td className="py-1.5 min-w-0 max-w-[170px]" title={[displayModel, actualModel, r.comboRunId ? `run=${r.comboRunId}` : null].filter(Boolean).join(" | ")}>
+-                      <div className="truncate font-mono text-text-main">{displayModel}</div>
+-                      <div className="truncate text-[10px] text-text-muted">{actualModel}</div>
+-                    </td>
++                    <td className="py-1.5 min-w-0 max-w-[170px] truncate font-mono text-text-main" title={[actualModel, r.comboRunId ? `run=${r.comboRunId}` : null].filter(Boolean).join(" | ")}>{actualName}</td>
+                     <td className="py-1.5 text-right whitespace-nowrap">
+                       {isPending ? (
+                         <span className="text-text-muted text-[10px] uppercase tracking-wide">Running</span>

@@ -1,0 +1,77 @@
+diff --git a/src/lib/db/repos/usageRepo.js b/src/lib/db/repos/usageRepo.js
+index 2a5ad86..8657b80 100644
+--- a/src/lib/db/repos/usageRepo.js
++++ b/src/lib/db/repos/usageRepo.js
+@@ -16,12 +16,14 @@ if (!global._statsEmitter) {
+   global._statsEmitter.setMaxListeners(50);
+ }
+ if (!global._pendingTimers) global._pendingTimers = {};
++if (!global._pendingRequestStartedAt) global._pendingRequestStartedAt = {};
+ if (!global._recentRing) global._recentRing = { items: [], initialized: false };
+ if (!global._connectionMapCache) global._connectionMapCache = { map: {}, ts: 0 };
+ 
+ const pendingRequests = global._pendingRequests;
+ const lastErrorProvider = global._lastErrorProvider;
+ const pendingTimers = global._pendingTimers;
++const pendingRequestStartedAt = global._pendingRequestStartedAt;
+ const recentRing = global._recentRing;
+ const connCache = global._connectionMapCache;
+ 
+@@ -224,9 +226,11 @@ export function trackPendingRequest(model, provider, connectionId, started, erro
+   }
+ 
+   if (started) {
++    if (!pendingRequestStartedAt[timerKey]) pendingRequestStartedAt[timerKey] = new Date().toISOString();
+     clearTimeout(pendingTimers[timerKey]);
+     pendingTimers[timerKey] = setTimeout(() => {
+       delete pendingTimers[timerKey];
++      delete pendingRequestStartedAt[timerKey];
+       if (pendingRequests.byModel[modelKey] > 0) pendingRequests.byModel[modelKey] = 0;
+       if (connectionId && pendingRequests.byAccount[connectionId]?.[modelKey] > 0) {
+         pendingRequests.byAccount[connectionId][modelKey] = 0;
+@@ -236,6 +240,7 @@ export function trackPendingRequest(model, provider, connectionId, started, erro
+   } else {
+     clearTimeout(pendingTimers[timerKey]);
+     delete pendingTimers[timerKey];
++    if (!pendingRequests.byModel[modelKey]) delete pendingRequestStartedAt[timerKey];
+   }
+ 
+   if (!started && error && provider) {
+@@ -260,7 +265,9 @@ export async function getActiveRequests() {
+         activeRequests.push({
+           model: match ? match[1] : modelKey,
+           provider: match ? match[2] : "unknown",
+-          account: accountName, count,
++          account: accountName,
++          count,
++          timestamp: pendingRequestStartedAt[`${connectionId}|${modelKey}`] || new Date().toISOString(),
+         });
+       }
+     }
+diff --git a/src/shared/components/UsageStats.js b/src/shared/components/UsageStats.js
+index d27c117..fabb380 100644
+--- a/src/shared/components/UsageStats.js
++++ b/src/shared/components/UsageStats.js
+@@ -68,9 +68,11 @@ function RecentRequests({ requests = [], activeRequests = [] }) {
+                     </td>
+                     <td className="py-1.5 min-w-0 max-w-[170px] truncate font-mono text-text-main" title={[actualModel, r.account ? `account=${r.account}` : null].filter(Boolean).join(" | ")}>{r.model || "Running"}</td>
+                     <td className="py-1.5 text-right whitespace-nowrap">
+-                      <span className="text-text-muted text-[10px] uppercase tracking-wide">Running</span>
++                      <span className="text-primary">0↑</span>
++                      {" "}
++                      <span className="text-success">0↓</span>
+                     </td>
+-                    <td className="py-1.5 text-right text-text-muted whitespace-nowrap">now</td>
++                    <td className="py-1.5 text-right text-text-muted whitespace-nowrap"><TimeAgo timestamp={r.timestamp} /></td>
+                   </tr>
+                 );
+               })}
+@@ -96,7 +98,7 @@ function RecentRequests({ requests = [], activeRequests = [] }) {
+                         </>
+                       )}
+                     </td>
+-                    <td className="py-1.5 text-right text-text-muted whitespace-nowrap">{isPending ? "now" : <TimeAgo timestamp={r.timestamp} />}</td>
++                    <td className="py-1.5 text-right text-text-muted whitespace-nowrap"><TimeAgo timestamp={r.timestamp} /></td>
+                   </tr>
+                 );
+               })}

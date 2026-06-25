@@ -1,0 +1,12 @@
+diff --git a/open-sse/utils/usageTracking.js b/open-sse/utils/usageTracking.js
+index aed4111..b3864a9 100644
+--- a/open-sse/utils/usageTracking.js
++++ b/open-sse/utils/usageTracking.js
+@@ -342,6 +342,5 @@ export function logUsage(provider, usage, model = null, connectionId = null, api
+     cache_creation_input_tokens: cacheCreation || 0,
+     reasoning_tokens: reasoning || 0
+   };
+-  saveRequestUsage({ model, provider, connectionId, tokens, apiKey: apiKey || undefined }).catch(() => { });
+-  appendRequestLog({ model, provider, connectionId, tokens, status: "200 OK" }).catch(() => { });
++  // Usage persistence handled by saveUsageStats() in onStreamComplete to avoid duplicate writes.
+ }

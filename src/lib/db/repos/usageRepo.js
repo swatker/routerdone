@@ -16,12 +16,14 @@ if (!global._statsEmitter) {
   global._statsEmitter.setMaxListeners(50);
 }
 if (!global._pendingTimers) global._pendingTimers = {};
+if (!global._pendingRequestStartedAt) global._pendingRequestStartedAt = {};
 if (!global._recentRing) global._recentRing = { items: [], initialized: false };
 if (!global._connectionMapCache) global._connectionMapCache = { map: {}, ts: 0 };
 
 const pendingRequests = global._pendingRequests;
 const lastErrorProvider = global._lastErrorProvider;
 const pendingTimers = global._pendingTimers;
+const pendingRequestStartedAt = global._pendingRequestStartedAt;
 const recentRing = global._recentRing;
 const connCache = global._connectionMapCache;
 
@@ -83,6 +85,59 @@ function pushToRing(entry) {
   }
 }
 
+function normalizeRecentRequest(entry) {
+  const tokens = entry.tokens || {};
+  const meta = entry.meta || {};
+  const comboName = meta.comboName || null;
+  const requestedModel = meta.requestedModel || null;
+  const actualProvider = meta.actualProvider || entry.provider || "";
+  const actualModel = meta.actualModel || entry.model || "";
+
+  return {
+    timestamp: entry.timestamp,
+    model: entry.model,
+    provider: entry.provider || "",
+    displayModel: comboName || requestedModel || entry.model || "unknown",
+    requestedModel,
+    comboName,
+    comboRunId: meta.comboRunId || null,
+    attemptModel: meta.attemptModel || null,
+    attemptIndex: meta.attemptIndex || null,
+    attemptTotal: meta.attemptTotal || null,
+    actualProvider,
+    actualModel,
+    promptTokens: tokens.prompt_tokens || tokens.input_tokens || 0,
+    completionTokens: tokens.completion_tokens || tokens.output_tokens || 0,
+    status: entry.status || "ok",
+  };
+}
+
+function requestGroupKey(entry) {
+  if (entry.comboRunId) return `run:${entry.comboRunId}`;
+  const minute = entry.timestamp ? entry.timestamp.slice(0, 16) : "";
+  return `usage:${entry.promptTokens}|${entry.completionTokens}|${minute}`;
+}
+
+function preferRecentRequest(current, next) {
+  if (!current) return next;
+  const currentIsCombo = Boolean(current.comboName || current.requestedModel?.includes("fallback") || current.displayModel?.includes("fallback"));
+  const nextIsCombo = Boolean(next.comboName || next.requestedModel?.includes("fallback") || next.displayModel?.includes("fallback"));
+  if (nextIsCombo && !currentIsCombo) {
+    return { ...next, actualProvider: current.actualProvider || next.actualProvider, actualModel: current.actualModel || next.actualModel };
+  }
+  if (!nextIsCombo && currentIsCombo) {
+    return { ...current, actualProvider: next.actualProvider || current.actualProvider, actualModel: next.actualModel || current.actualModel };
+  }
+  return new Date(next.timestamp) > new Date(current.timestamp) ? next : current;
+}
+
+function collapseRecentRequests(entries) {
+  const groups = new Map();
+  for (const entry of entries) {
+    groups.set(requestGroupKey(entry), preferRecentRequest(groups.get(requestGroupKey(entry)), entry));
+  }
+  return [...groups.values()].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+}
 async function getConnectionMapCached() {
   if (Date.now() - connCache.ts < CONN_CACHE_TTL_MS) return connCache.map;
   try {
@@ -101,11 +156,11 @@ async function ensureRingInitialized() {
   recentRing.initialized = true;
   try {
     const db = await getAdapter();
-    const rows = db.all(`SELECT timestamp, provider, model, connectionId, apiKey, endpoint, cost, status, tokens FROM usageHistory ORDER BY id DESC LIMIT ?`, [RING_CAP]);
+    const rows = db.all(`SELECT timestamp, provider, model, connectionId, apiKey, endpoint, cost, status, tokens, meta FROM usageHistory ORDER BY id DESC LIMIT ?`, [RING_CAP]);
     recentRing.items = rows.reverse().map((r) => ({
       timestamp: r.timestamp, provider: r.provider, model: r.model, connectionId: r.connectionId,
       apiKey: r.apiKey, endpoint: r.endpoint, cost: r.cost, status: r.status,
-      tokens: parseJson(r.tokens, {}),
+      tokens: parseJson(r.tokens, {}), meta: parseJson(r.meta, {}),
     }));
   } catch {}
 }
@@ -171,9 +226,11 @@ export function trackPendingRequest(model, provider, connectionId, started, erro
   }
 
   if (started) {
+    if (!pendingRequestStartedAt[timerKey]) pendingRequestStartedAt[timerKey] = new Date().toISOString();
     clearTimeout(pendingTimers[timerKey]);
     pendingTimers[timerKey] = setTimeout(() => {
       delete pendingTimers[timerKey];
+      delete pendingRequestStartedAt[timerKey];
       if (pendingRequests.byModel[modelKey] > 0) pendingRequests.byModel[modelKey] = 0;
       if (connectionId && pendingRequests.byAccount[connectionId]?.[modelKey] > 0) {
         pendingRequests.byAccount[connectionId][modelKey] = 0;
@@ -183,6 +240,7 @@ export function trackPendingRequest(model, provider, connectionId, started, erro
   } else {
     clearTimeout(pendingTimers[timerKey]);
     delete pendingTimers[timerKey];
+    if (!pendingRequests.byModel[modelKey]) delete pendingRequestStartedAt[timerKey];
   }
 
   if (!started && error && provider) {
@@ -207,7 +265,9 @@ export async function getActiveRequests() {
         activeRequests.push({
           model: match ? match[1] : modelKey,
           provider: match ? match[2] : "unknown",
-          account: accountName, count,
+          account: accountName,
+          count,
+          timestamp: pendingRequestStartedAt[`${connectionId}|${modelKey}`] || new Date().toISOString(),
         });
       }
     }
@@ -215,25 +275,16 @@ export async function getActiveRequests() {
 
   await ensureRingInitialized();
   const seen = new Set();
-  const recentRequests = [...recentRing.items]
+  const recentRequests = collapseRecentRequests([...recentRing.items]
     .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
-    .map((e) => {
-      const t = e.tokens || {};
-      return {
-        timestamp: e.timestamp, model: e.model, provider: e.provider || "",
-        promptTokens: t.prompt_tokens || t.input_tokens || 0,
-        completionTokens: t.completion_tokens || t.output_tokens || 0,
-        status: e.status || "ok",
-      };
-    })
+    .map(normalizeRecentRequest)
     .filter((e) => {
       if (e.promptTokens === 0 && e.completionTokens === 0) return false;
-      const minute = e.timestamp ? e.timestamp.slice(0, 16) : "";
-      const key = `${e.model}|${e.provider}|${e.promptTokens}|${e.completionTokens}|${minute}`;
+      const key = requestGroupKey(e);
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
-    })
+    }))
     .slice(0, 20);
 
   const errorProvider = (Date.now() - lastErrorProvider.ts < 10000) ? lastErrorProvider.provider : "";
@@ -342,26 +393,24 @@ export async function getUsageStats(period = "all") {
   for (const k of allApiKeys) apiKeyMap[k.key] = { name: k.name, id: k.id, createdAt: k.createdAt };
 
   // recentRequests from live history (last 100 entries enough for 20 deduped)
-  const recentRows = db.all(`SELECT timestamp, provider, model, tokens, status FROM usageHistory ORDER BY id DESC LIMIT 100`);
+  const recentRows = db.all(`SELECT timestamp, provider, model, tokens, status, meta FROM usageHistory ORDER BY id DESC LIMIT 100`);
   const seen = new Set();
-  const recentRequests = recentRows
-    .map((r) => {
-      const t = parseJson(r.tokens, {}) || {};
-      return {
-        timestamp: r.timestamp, model: r.model, provider: r.provider || "",
-        promptTokens: t.prompt_tokens || t.input_tokens || 0,
-        completionTokens: t.completion_tokens || t.output_tokens || 0,
-        status: r.status || "ok",
-      };
-    })
+  const recentRequests = collapseRecentRequests(recentRows
+    .map((r) => normalizeRecentRequest({
+      timestamp: r.timestamp,
+      model: r.model,
+      provider: r.provider,
+      tokens: parseJson(r.tokens, {}) || {},
+      status: r.status,
+      meta: parseJson(r.meta, {}) || {},
+    }))
     .filter((e) => {
       if (e.promptTokens === 0 && e.completionTokens === 0) return false;
-      const minute = e.timestamp ? e.timestamp.slice(0, 16) : "";
-      const key = `${e.model}|${e.provider}|${e.promptTokens}|${e.completionTokens}|${minute}`;
+      const key = requestGroupKey(e);
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
-    })
+    }))
     .slice(0, 20);
 
   const stats = {

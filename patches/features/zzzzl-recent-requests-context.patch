@@ -1,0 +1,194 @@
+diff --git a/src/lib/db/repos/usageRepo.js b/src/lib/db/repos/usageRepo.js
+index 5d9aaa8..5ec59ab 100644
+--- a/src/lib/db/repos/usageRepo.js
++++ b/src/lib/db/repos/usageRepo.js
+@@ -83,6 +83,32 @@ function pushToRing(entry) {
+   }
+ }
+ 
++function normalizeRecentRequest(entry) {
++  const tokens = entry.tokens || {};
++  const meta = entry.meta || {};
++  const comboName = meta.comboName || null;
++  const requestedModel = meta.requestedModel || null;
++  const actualProvider = meta.actualProvider || entry.provider || "";
++  const actualModel = meta.actualModel || entry.model || "";
++
++  return {
++    timestamp: entry.timestamp,
++    model: entry.model,
++    provider: entry.provider || "",
++    displayModel: comboName || requestedModel || entry.model || "unknown",
++    requestedModel,
++    comboName,
++    comboRunId: meta.comboRunId || null,
++    attemptModel: meta.attemptModel || null,
++    attemptIndex: meta.attemptIndex || null,
++    attemptTotal: meta.attemptTotal || null,
++    actualProvider,
++    actualModel,
++    promptTokens: tokens.prompt_tokens || tokens.input_tokens || 0,
++    completionTokens: tokens.completion_tokens || tokens.output_tokens || 0,
++    status: entry.status || "ok",
++  };
++}
+ async function getConnectionMapCached() {
+   if (Date.now() - connCache.ts < CONN_CACHE_TTL_MS) return connCache.map;
+   try {
+@@ -101,11 +127,11 @@ async function ensureRingInitialized() {
+   recentRing.initialized = true;
+   try {
+     const db = await getAdapter();
+-    const rows = db.all(`SELECT timestamp, provider, model, connectionId, apiKey, endpoint, cost, status, tokens FROM usageHistory ORDER BY id DESC LIMIT ?`, [RING_CAP]);
++    const rows = db.all(`SELECT timestamp, provider, model, connectionId, apiKey, endpoint, cost, status, tokens, meta FROM usageHistory ORDER BY id DESC LIMIT ?`, [RING_CAP]);
+     recentRing.items = rows.reverse().map((r) => ({
+       timestamp: r.timestamp, provider: r.provider, model: r.model, connectionId: r.connectionId,
+       apiKey: r.apiKey, endpoint: r.endpoint, cost: r.cost, status: r.status,
+-      tokens: parseJson(r.tokens, {}),
++      tokens: parseJson(r.tokens, {}), meta: parseJson(r.meta, {}),
+     }));
+   } catch {}
+ }
+@@ -217,19 +243,11 @@ export async function getActiveRequests() {
+   const seen = new Set();
+   const recentRequests = [...recentRing.items]
+     .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+-    .map((e) => {
+-      const t = e.tokens || {};
+-      return {
+-        timestamp: e.timestamp, model: e.model, provider: e.provider || "",
+-        promptTokens: t.prompt_tokens || t.input_tokens || 0,
+-        completionTokens: t.completion_tokens || t.output_tokens || 0,
+-        status: e.status || "ok",
+-      };
+-    })
++    .map(normalizeRecentRequest)
+     .filter((e) => {
+       if (e.promptTokens === 0 && e.completionTokens === 0) return false;
+       const minute = e.timestamp ? e.timestamp.slice(0, 16) : "";
+-      const key = `${e.model}|${e.provider}|${e.promptTokens}|${e.completionTokens}|${minute}`;
++      const key = `${e.model}|${e.provider}|${e.promptTokens}|${e.completionTokens}|${e.comboRunId || ""}|${minute}`;
+       if (seen.has(key)) return false;
+       seen.add(key);
+       return true;
+@@ -342,22 +360,21 @@ export async function getUsageStats(period = "all") {
+   for (const k of allApiKeys) apiKeyMap[k.key] = { name: k.name, id: k.id, createdAt: k.createdAt };
+ 
+   // recentRequests from live history (last 100 entries enough for 20 deduped)
+-  const recentRows = db.all(`SELECT timestamp, provider, model, tokens, status FROM usageHistory ORDER BY id DESC LIMIT 100`);
++  const recentRows = db.all(`SELECT timestamp, provider, model, tokens, status, meta FROM usageHistory ORDER BY id DESC LIMIT 100`);
+   const seen = new Set();
+   const recentRequests = recentRows
+-    .map((r) => {
+-      const t = parseJson(r.tokens, {}) || {};
+-      return {
+-        timestamp: r.timestamp, model: r.model, provider: r.provider || "",
+-        promptTokens: t.prompt_tokens || t.input_tokens || 0,
+-        completionTokens: t.completion_tokens || t.output_tokens || 0,
+-        status: r.status || "ok",
+-      };
+-    })
++    .map((r) => normalizeRecentRequest({
++      timestamp: r.timestamp,
++      model: r.model,
++      provider: r.provider,
++      tokens: parseJson(r.tokens, {}) || {},
++      status: r.status,
++      meta: parseJson(r.meta, {}) || {},
++    }))
+     .filter((e) => {
+       if (e.promptTokens === 0 && e.completionTokens === 0) return false;
+       const minute = e.timestamp ? e.timestamp.slice(0, 16) : "";
+-      const key = `${e.model}|${e.provider}|${e.promptTokens}|${e.completionTokens}|${minute}`;
++      const key = `${e.model}|${e.provider}|${e.promptTokens}|${e.completionTokens}|${e.comboRunId || ""}|${minute}`;
+       if (seen.has(key)) return false;
+       seen.add(key);
+       return true;
+diff --git a/src/shared/components/UsageStats.js b/src/shared/components/UsageStats.js
+index 950a7af..c807904 100644
+--- a/src/shared/components/UsageStats.js
++++ b/src/shared/components/UsageStats.js
+@@ -37,7 +37,7 @@ function TimeAgo({ timestamp }) {
+   return <>{timeAgo(timestamp)}</>;
+ }
+ 
+-function RecentRequests({ requests = [] }) {
++function RecentRequests({ requests = [], activeRequests = [] }) {
+   return (
+     <Card className="flex min-w-0 flex-col overflow-hidden" padding="sm" style={{ height: 480 }}>
+       {/* Header */}
+@@ -45,7 +45,7 @@ function RecentRequests({ requests = [] }) {
+         <span className="text-xs font-semibold text-text-muted uppercase tracking-wide">Recent Requests</span>
+       </div>
+ 
+-      {!requests.length ? (
++      {!requests.length && !activeRequests.length ? (
+         <div className="flex-1 flex items-center justify-center text-text-muted text-sm">No requests yet.</div>
+       ) : (
+         <div className="flex-1 overflow-y-auto">
+@@ -59,20 +59,50 @@ function RecentRequests({ requests = [] }) {
+               </tr>
+             </thead>
+             <tbody className="divide-y divide-border/50">
++              {activeRequests.map((r, i) => {
++                const actualModel = r.model ? `${r.provider || "unknown"}/${r.model}` : (r.provider || "unknown");
++                return (
++                  <tr key={`active-${i}`} className="hover:bg-bg-subtle transition-colors">
++                    <td className="py-1.5">
++                      <span className="block w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
++                    </td>
++                    <td className="py-1.5 min-w-0 max-w-[170px]" title={[r.model || "Running", actualModel, r.account ? `account=${r.account}` : null].filter(Boolean).join(" | ")}>
++                      <div className="truncate font-mono text-text-main">{r.model || "Running"}</div>
++                      <div className="truncate text-[10px] text-text-muted">{actualModel}</div>
++                    </td>
++                    <td className="py-1.5 text-right whitespace-nowrap">
++                      <span className="text-text-muted text-[10px] uppercase tracking-wide">Running</span>
++                    </td>
++                    <td className="py-1.5 text-right text-text-muted whitespace-nowrap">now</td>
++                  </tr>
++                );
++              })}
+               {requests.map((r, i) => {
+-                const ok = !r.status || r.status === "ok" || r.status === "success";
++                const isPending = r.status === "PENDING" || r.status === "pending";
++                const ok = !r.status || r.status === "ok" || r.status === "success" || isPending;
++                const displayModel = r.displayModel || r.requestedModel || r.model;
++                const actualModel = r.actualProvider && r.actualModel ? `${r.actualProvider}/${r.actualModel}` : r.actualModel || r.provider || r.model;
+                 return (
+                   <tr key={i} className="hover:bg-bg-subtle transition-colors">
+                     <td className="py-1.5">
+                       <span className={`block w-1.5 h-1.5 rounded-full ${ok ? "bg-success" : "bg-error"}`} />
+                     </td>
+-                    <td className="py-1.5 font-mono truncate max-w-[120px]" title={r.model}>{r.model}</td>
++                    <td className="py-1.5 min-w-0 max-w-[170px]" title={[displayModel, actualModel, r.comboRunId ? `run=${r.comboRunId}` : null].filter(Boolean).join(" | ")}>
++                      <div className="truncate font-mono text-text-main">{displayModel}</div>
++                      <div className="truncate text-[10px] text-text-muted">{actualModel}</div>
++                    </td>
+                     <td className="py-1.5 text-right whitespace-nowrap">
+-                      <span className="text-primary">{fmt(r.promptTokens)}↑</span>
+-                      {" "}
+-                      <span className="text-success">{fmt(r.completionTokens)}↓</span>
++                      {isPending ? (
++                        <span className="text-text-muted text-[10px] uppercase tracking-wide">Running</span>
++                      ) : (
++                        <>
++                          <span className="text-primary">{fmt(r.promptTokens)}↑</span>
++                          {" "}
++                          <span className="text-success">{fmt(r.completionTokens)}↓</span>
++                        </>
++                      )}
+                     </td>
+-                    <td className="py-1.5 text-right text-text-muted whitespace-nowrap"><TimeAgo timestamp={r.timestamp} /></td>
++                    <td className="py-1.5 text-right text-text-muted whitespace-nowrap">{isPending ? "now" : <TimeAgo timestamp={r.timestamp} />}</td>
+                   </tr>
+                 );
+               })}
+@@ -465,7 +495,7 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
+             lastProvider={stats.recentRequests?.[0]?.provider || ""}
+             errorProvider={stats.errorProvider || ""}
+           />
+-          <RecentRequests requests={stats.recentRequests || []} />
++          <RecentRequests requests={stats.recentRequests || []} activeRequests={stats.activeRequests || []} />
+         </div>
+       )}
+ 
