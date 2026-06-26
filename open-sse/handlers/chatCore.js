@@ -146,6 +146,15 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     translatedBody.model = upstreamModel;
   }
 
+  // Sync the upstream body's stream flag with the internal stream decision.
+  // When a provider force-streams (e.g. openai-compatible-*), the internal 
+  // var is true but the client body may carry stream:false. Without this, we'd ask
+  // the upstream for non-streaming while parsing the reply as SSE — which breaks
+  // providers like VietAPI that emit an empty SSE body for stream:false.
+  if (translatedBody && typeof translatedBody === "object") {
+    translatedBody.stream = stream;
+  }
+
   // Dedupe duplicate built-in tools when equivalent MCP tools are present (Claude clients only).
   if (clientTool === "claude" && Array.isArray(translatedBody.tools)) {
     const { tools: deduped, stripped } = dedupeTools(translatedBody.tools);
