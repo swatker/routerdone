@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import PropTypes from "prop-types";
 import Modal from "./Modal";
 import ProviderIcon from "./ProviderIcon";
@@ -43,10 +43,17 @@ export default function ModelSelectModal({
     });
   }, [activeProviders, kindFilter]);
   const { getCaps } = useModelCaps();
+  const liveProviderTargets = useMemo(
+    () => filteredActiveProviders
+      .map((p) => ({ connectionId: p.id || p.connectionId, providerId: p.provider }))
+      .filter((p) => p.connectionId && p.providerId),
+    [filteredActiveProviders]
+  );
   const [searchQuery, setSearchQuery] = useState("");
   const [combos, setCombos] = useState([]);
   const [providerNodes, setProviderNodes] = useState([]);
   const [customModels, setCustomModels] = useState([]);
+  const [liveModelsByProvider, setLiveModelsByProvider] = useState({});
   const [disabledModels, setDisabledModels] = useState({});
 
   const fetchCombos = async () => {
@@ -80,6 +87,37 @@ export default function ModelSelectModal({
   useEffect(() => {
     if (isOpen) fetchProviderNodes();
   }, [isOpen]);
+  useEffect(() => {
+    if (!isOpen || liveProviderTargets.length === 0) return;
+
+    let cancelled = false;
+    const loadLiveModels = async () => {
+      const entries = await Promise.all(
+        liveProviderTargets.map(async ({ connectionId, providerId }) => {
+          try {
+            const res = await fetch(`/api/providers/${connectionId}/models`, { cache: "no-store" });
+            if (!res.ok) return null;
+            const data = await res.json();
+            const models = Array.isArray(data.models) ? data.models : [];
+            return { connectionId, providerId, models };
+          } catch {
+            return null;
+          }
+        })
+      );
+      if (cancelled) return;
+      const next = {};
+      for (const entry of entries) {
+        if (!entry) continue;
+        next[entry.providerId] = entry.models;
+        next[entry.connectionId] = entry.models;
+      }
+      setLiveModelsByProvider(next);
+    };
+
+    loadLiveModels();
+    return () => { cancelled = true; };
+  }, [isOpen, liveProviderTargets]);
 
   const fetchCustomModels = async () => {
     try {
@@ -114,6 +152,27 @@ export default function ModelSelectModal({
   }, [isOpen]);
 
   const allProviders = useMemo(() => ({ ...OAUTH_PROVIDERS, ...FREE_PROVIDERS, ...FREE_TIER_PROVIDERS, ...APIKEY_PROVIDERS }), []);
+  const normalizeSearch = useCallback((value) => String(value || "").toLowerCase().replace(/[,，]/g, "."), []);
+  const mergeLiveModels = useCallback((providerId, alias, fallbackModels = [], connectionId = null) => {
+    const liveModels = liveModelsByProvider[connectionId] || liveModelsByProvider[providerId] || [];
+    const merged = [...fallbackModels];
+    const seen = new Set(merged.map((m) => m.value));
+    for (const model of liveModels) {
+      const modelId = String(model?.id || model?.name || model?.model || "");
+      if (!modelId) continue;
+      const value = modelId.includes("/") ? modelId : `${alias}/${modelId}`;
+      if (seen.has(value)) continue;
+      seen.add(value);
+      merged.push({
+        id: modelId,
+        name: model?.name || modelId,
+        value,
+        kind: getModelKind(model),
+        isLive: true,
+      });
+    }
+    return merged;
+  }, [liveModelsByProvider]);
 
   // Group models by provider with priority order
   const groupedModels = useMemo(() => {
@@ -249,9 +308,11 @@ export default function ModelSelectModal({
             value: `${nodePrefix}/${fullModel.replace(`${providerId}/`, "")}`,
           }));
 
+        const liveNodeModels = mergeLiveModels(providerId, nodePrefix, nodeModels, connection?.id || connection?.connectionId);
+
         // Always show compatible providers that are connected, even with no aliases.
-        // When no aliases exist, show a placeholder so users know it's available.
-        const modelsToShow = nodeModels.length > 0 ? nodeModels : [{
+        // Prefer live /models output; fall back to placeholder when the provider cannot list models.
+        const modelsToShow = liveNodeModels.length > 0 ? liveNodeModels : [{
           id: `__placeholder__${providerId}`,
           name: `${nodePrefix}/model-id`,
           value: `${nodePrefix}/model-id`,
@@ -290,11 +351,11 @@ export default function ModelSelectModal({
           .filter((m) => m.providerAlias === alias && !hardcodedIds.has(m.id) && !customAliasIds.has(m.id))
           .map((m) => ({ id: m.id, name: m.name || m.id, value: `${alias}/${m.id}`, isCustom: true }));
 
-        const merged = [
+        const merged = mergeLiveModels(providerId, alias, [
           ...hardcodedModels.map((m) => ({ id: m.id, name: m.name, value: `${alias}/${m.id}`, kind: getModelKind(m) })),
           ...customAliasModels,
           ...customRegisteredModels,
-        ];
+        ]);
         // Dedupe by value (alias may equal hardcoded id, causing React key collision)
         const seen = new Set();
         let allModels = filterByKind(merged.filter((m) => {
@@ -336,15 +397,15 @@ export default function ModelSelectModal({
     });
 
     return groups;
-  }, [filteredActiveProviders, modelAliases, allProviders, providerNodes, customModels, disabledModels, kindFilter, activeProviders]);
+  }, [filteredActiveProviders, modelAliases, allProviders, providerNodes, customModels, disabledModels, kindFilter, activeProviders, mergeLiveModels]);
 
   // Filter combos by search query (and hide combos when kindFilter is set — combos are LLM-only by design)
   const filteredCombos = useMemo(() => {
     if (kindFilter) return [];
     if (!searchQuery.trim()) return combos;
-    const query = searchQuery.toLowerCase();
-    return combos.filter(c => c.name.toLowerCase().includes(query));
-  }, [combos, searchQuery, kindFilter]);
+    const query = normalizeSearch(searchQuery);
+    return combos.filter(c => normalizeSearch(c.name).includes(query));
+  }, [combos, searchQuery, kindFilter, normalizeSearch]);
 
   // Sort models alphabetically, with added models floated to top
   const sortModels = (models) => {
@@ -355,17 +416,17 @@ export default function ModelSelectModal({
 
   // Filter models by search query
   const filteredGroups = useMemo(() => {
-    const query = searchQuery.trim().toLowerCase();
+    const query = normalizeSearch(searchQuery.trim());
 
     const filtered = {};
     Object.entries(groupedModels).forEach(([providerId, group]) => {
       let models = group.models;
       if (query) {
-        const providerNameMatches = group.name.toLowerCase().includes(query);
+        const providerNameMatches = normalizeSearch(group.name).includes(query);
         models = models.filter(
           (m) =>
-            m.name.toLowerCase().includes(query) ||
-            m.id.toLowerCase().includes(query)
+            normalizeSearch(m.name).includes(query) ||
+            normalizeSearch(m.id).includes(query)
         );
         if (models.length === 0 && !providerNameMatches) return;
       }
@@ -376,7 +437,7 @@ export default function ModelSelectModal({
     });
 
     return filtered;
-  }, [groupedModels, searchQuery, addedModelValues]);
+  }, [groupedModels, searchQuery, addedModelValues, normalizeSearch]);
 
   const handleSelect = (model) => {
     const value = model?.value || model?.name || model;
