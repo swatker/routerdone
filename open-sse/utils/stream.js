@@ -182,6 +182,21 @@ export function createSSEStream(options = {}) {
                 accumulatedThinking += reasoning;
               }
 
+              // OpenAI Responses passthrough: delta is a string on response.*.delta
+              // events. Accumulate so totalContentLength > 0 and the usage-estimate
+              // fallback can fire when upstream omits usage (e.g. dynamic
+              // openai-compatible-responses connections), so Recent Requests + the
+              // per-model table get a row with the real model name.
+              if (typeof parsed.delta === "string" && parsed.delta) {
+                if (parsed.type === "response.output_text.delta") {
+                  totalContentLength += parsed.delta.length;
+                  accumulatedContent += parsed.delta;
+                } else if (parsed.type === "response.reasoning_summary_text.delta" || parsed.type === "response.reasoning_text.delta") {
+                  totalContentLength += parsed.delta.length;
+                  accumulatedThinking += parsed.delta;
+                }
+              }
+
               const extracted = extractUsage(parsed);
               if (extracted) {
                 usage = extracted;
