@@ -2,6 +2,7 @@ import { getModelsByProviderId } from "open-sse/config/providerModels.js";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 export const QUOTA_CACHE_KEY = "quotaCacheData";
+export const CONNECTIONS_CACHE_KEY = "quotaConnectionsSnapshot";
 export const REFRESH_INTERVAL_MS = 60000;
 // Claude usage/quota endpoint rate-limits; poll it less often than other providers
 export const CLAUDE_REFRESH_INTERVAL_MS = 180000;
@@ -208,6 +209,43 @@ export function setQuotaCache(connectionId, quotaEntry) {
   }
 }
 
+export function getConnectionsCache() {
+  if (typeof window === "undefined") return null;
+  try {
+    const cached = window.localStorage.getItem(CONNECTIONS_CACHE_KEY);
+    return cached ? JSON.parse(cached) : null;
+  } catch (error) {
+    console.error("Error reading connections cache:", error);
+    return null;
+  }
+}
+
+export function setConnectionsCache(snapshot) {
+  if (typeof window === "undefined" || !snapshot) return;
+  try {
+    window.localStorage.setItem(
+      CONNECTIONS_CACHE_KEY,
+      JSON.stringify({ ...snapshot, cachedAt: new Date().toISOString() }),
+    );
+  } catch (error) {
+    console.error("Error writing connections cache:", error);
+  }
+}
+
+export function setQuotaCacheBatch(entries) {
+  if (typeof window === "undefined" || !entries) return;
+  try {
+    const cache = getQuotaCache();
+    const now = new Date().toISOString();
+    for (const [id, entry] of Object.entries(entries)) {
+      cache[id] = { ...entry, cachedAt: now };
+    }
+    window.localStorage.setItem(QUOTA_CACHE_KEY, JSON.stringify(cache));
+  } catch (error) {
+    console.error("Error batch-writing quota cache:", error);
+  }
+}
+
 /**
  * Format ISO date string to countdown format (inspired by vscode-antigravity-cockpit)
  * @param {string|Date} date - ISO date string or Date object
@@ -224,20 +262,20 @@ export function formatResetTime(date) {
     if (diffMs <= 0) return "-";
 
     const totalMinutes = Math.ceil(diffMs / (1000 * 60));
-    
+
     // < 60 minutes: show only minutes
     if (totalMinutes < 60) {
       return `${totalMinutes}m`;
     }
-    
+
     const totalHours = Math.floor(totalMinutes / 60);
     const remainingMinutes = totalMinutes % 60;
-    
+
     // < 24 hours: show hours and minutes
     if (totalHours < 24) {
       return `${totalHours}h ${remainingMinutes}m`;
     }
-    
+
     // >= 24 hours: show days, hours, and minutes
     const days = Math.floor(totalHours / 24);
     const remainingHours = totalHours % 24;
@@ -455,7 +493,7 @@ export function parseQuotaData(provider, data) {
   const modelOrder = getModelsByProviderId(provider);
   if (modelOrder.length > 0) {
     const orderMap = new Map(modelOrder.map((m, i) => [m.id, i]));
-    
+
     normalizedQuotas.sort((a, b) => {
       // Use modelKey for antigravity, otherwise use name
       const keyA = a.modelKey || a.name;

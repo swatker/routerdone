@@ -1,5 +1,6 @@
 import PropTypes from "prop-types";
 import { CapacityBadges } from "@/shared/components";
+import { translate } from "@/i18n/runtime";
 
 export default function ModelRow({ model, fullModel, alias, copied, onCopy, testStatus, isCustom, isFree, onDeleteAlias, onTest, isTesting, onDisable, caps }) {
   const borderColor = testStatus === "ok"
@@ -42,7 +43,7 @@ export default function ModelRow({ model, fullModel, alias, copied, onCopy, test
               </span>
             </button>
             <span className="pointer-events-none absolute mt-1 top-5 left-1/2 -translate-x-1/2 text-[10px] text-text-muted whitespace-nowrap opacity-0 group-hover/btn:opacity-100 transition-opacity">
-              {isTesting ? "Testing..." : "Test"}
+              {isTesting ? translate("Testing...") : translate("Test")}
             </span>
           </div>
         )}
@@ -56,14 +57,14 @@ export default function ModelRow({ model, fullModel, alias, copied, onCopy, test
             </span>
           </button>
           <span className="pointer-events-none absolute mt-1 top-5 left-1/2 -translate-x-1/2 text-[10px] text-text-muted whitespace-nowrap opacity-0 group-hover/btn:opacity-100 transition-opacity">
-            {copied === `model-${model.id}` ? "Copied!" : "Copy"}
+            {copied === `model-${model.id}` ? translate("Copied!") : translate("Copy")}
           </span>
         </div>
         {isCustom ? (
           <button
             onClick={onDeleteAlias}
             className="ml-auto rounded p-0.5 text-text-muted opacity-100 transition-opacity hover:bg-red-500/10 hover:text-red-500 sm:opacity-0 sm:group-hover:opacity-100"
-            title="Remove custom model"
+            title={translate("Remove custom model")}
           >
             <span className="material-symbols-outlined text-sm">close</span>
           </button>
@@ -71,7 +72,7 @@ export default function ModelRow({ model, fullModel, alias, copied, onCopy, test
           <button
             onClick={onDisable}
             className="ml-auto rounded p-0.5 text-text-muted opacity-100 transition-opacity hover:bg-red-500/10 hover:text-red-500 sm:opacity-0 sm:group-hover:opacity-100"
-            title="Disable this model"
+            title={translate("Disable this model")}
           >
             <span className="material-symbols-outlined text-sm">close</span>
           </button>

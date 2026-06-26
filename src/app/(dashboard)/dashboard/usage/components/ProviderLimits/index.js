@@ -23,6 +23,9 @@ import {
   reconcileConnectionsPage,
   getQuotaCache,
   setQuotaCache,
+  setQuotaCacheBatch,
+  getConnectionsCache,
+  setConnectionsCache,
   QUOTA_CACHE_KEY,
   REFRESH_INTERVAL_MS,
   CLAUDE_REFRESH_INTERVAL_MS,
@@ -152,6 +155,7 @@ export default function ProviderLimits() {
 
   const intervalRef = useRef(null);
   const connectionsRef = useRef(connections);
+  const hydratedRef = useRef(false);
   const countdownRef = useRef(null);
   const tickCountRef = useRef(0);
 
@@ -178,20 +182,23 @@ export default function ProviderLimits() {
         const connectionList = data.connections || [];
         const nextPagination = getSafePagination(data.pagination, pageSize);
         const nextTotals = getSafeTotals(data.totals, connectionList.length);
+        const providerOpts = getProviderOptions(data.providerOptions);
 
         setConnections(connectionList);
-        setProviderOptions(getProviderOptions(data.providerOptions));
+        setProviderOptions(providerOpts);
         setPagination(nextPagination);
         setTotals(nextTotals);
         setPage(getPaginationPageValue(data.pagination, targetPage));
+        setConnectionsCache({
+          connections: connectionList,
+          pagination: nextPagination,
+          totals: nextTotals,
+          providerOptions: providerOpts,
+        });
         return connectionList;
       } catch (error) {
         console.error("Error fetching connections:", error);
-        setConnections([]);
-        setProviderOptions([]);
-        setPagination({ page: 1, pageSize, total: 0, totalPages: 1 });
-        setTotals({ eligibleConnections: 0, providerFilteredConnections: 0 });
-        return [];
+        return connectionsRef.current;
       }
     },
     [accountFilter, expiringFirst, page, pageSize, providerFilter],
@@ -329,9 +336,7 @@ export default function ProviderLimits() {
 
       if (Object.keys(newQuotaData).length > 0) {
         setQuotaData((prev) => ({ ...prev, ...newQuotaData }));
-        for (const [id, entry] of Object.entries(newQuotaData)) {
-          setQuotaCache(id, entry);
-        }
+        setQuotaCacheBatch(newQuotaData);
       }
       if (Object.keys(newErrors).length > 0) {
         setErrors((prev) => ({ ...prev, ...newErrors }));
@@ -546,7 +551,42 @@ export default function ProviderLimits() {
 
   useEffect(() => {
     const initializeData = async () => {
-      setConnectionsLoading(true);
+      const isFirstHydration = !hydratedRef.current;
+      if (isFirstHydration) {
+        hydratedRef.current = true;
+        const snapshot = getConnectionsCache();
+        if (snapshot?.connections?.length) {
+          setConnections(snapshot.connections);
+          setProviderOptions(snapshot.providerOptions || []);
+          setPagination(
+            snapshot.pagination || {
+              page: 1,
+              pageSize,
+              total: snapshot.connections.length,
+              totalPages: 1,
+            },
+          );
+          setTotals(
+            snapshot.totals || {
+              eligibleConnections: 0,
+              providerFilteredConnections: 0,
+            },
+          );
+          setConnectionsLoading(false);
+
+          const quotaCache = getQuotaCache();
+          const cachedQuota = {};
+          for (const conn of snapshot.connections) {
+            if (quotaCache[conn.id]) cachedQuota[conn.id] = quotaCache[conn.id];
+          }
+          if (Object.keys(cachedQuota).length > 0) {
+            setQuotaData(cachedQuota);
+          }
+        } else {
+          setConnectionsLoading(true);
+        }
+      }
+
       const visibleConnections = await fetchConnections(page);
       setConnectionsLoading(false);
 

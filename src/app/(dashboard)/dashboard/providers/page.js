@@ -24,20 +24,21 @@ import { useNotificationStore } from "@/store/notificationStore";
 import { useHeaderSearchStore } from "@/store/headerSearchStore";
 import ModelAvailabilityBadge from "./components/ModelAvailabilityBadge";
 import AddCompatibleModal from "./components/AddCompatibleModal";
+import { translate } from "@/i18n/runtime";
 
 function getStatusDisplay(connected, error, errorCode) {
   const parts = [];
   if (connected > 0) {
     parts.push(
       <Badge key="connected" variant="success" size="sm" dot>
-        {connected} Connected
+        {connected} {translate("Connected")}
       </Badge>,
     );
   }
   if (error > 0) {
     const errText = errorCode
-      ? `${error} Error (${errorCode})`
-      : `${error} Error`;
+      ? `${error} ${translate("Error")} (${errorCode})`
+      : `${error} ${translate("Error")}`;
     parts.push(
       <Badge key="error" variant="error" size="sm" dot>
         {errText}
@@ -45,7 +46,7 @@ function getStatusDisplay(connected, error, errorCode) {
     );
   }
   if (parts.length === 0) {
-    return <span className="text-text-muted">No connections</span>;
+    return <span className="text-text-muted">{translate("No connections")}</span>;
   }
   return parts;
 }
@@ -110,7 +111,7 @@ export default function ProvidersPage() {
   const unregisterSearch = useHeaderSearchStore((s) => s.unregister);
 
   useEffect(() => {
-    registerSearch("Search providers...");
+    registerSearch(translate("Search providers..."));
     return () => unregisterSearch();
   }, [registerSearch, unregisterSearch]);
 
@@ -244,12 +245,12 @@ export default function ProvidersPage() {
       setTestResults(data);
       if (data.summary) {
         const { passed, failed, total } = data.summary;
-        if (failed === 0) notify.success(`All ${total} tests passed`);
-        else notify.warning(`${passed}/${total} passed, ${failed} failed`);
+        if (failed === 0) notify.success(translate("All") + ` ${total} ` + translate("tests passed"));
+        else notify.warning(`${passed}/${total} ` + translate("passed") + `, ${failed} ` + translate("failed"));
       }
     } catch (error) {
-      setTestResults({ error: "Test request failed" });
-      notify.error("Provider test failed");
+      setTestResults({ error: translate("Test request failed") });
+      notify.error(translate("Provider test failed"));
     } finally {
       setTestingMode(null);
     }
@@ -259,7 +260,7 @@ export default function ProvidersPage() {
     .filter((node) => node.type === "openai-compatible")
     .map((node) => ({
       id: node.id,
-      name: node.name || "OpenAI Compatible",
+      name: node.name || translate("OpenAI Compatible"),
       color: "#10A37F",
       textIcon: "OC",
       apiType: node.apiType,
@@ -270,7 +271,7 @@ export default function ProvidersPage() {
     .filter((node) => node.type === "anthropic-compatible")
     .map((node) => ({
       id: node.id,
-      name: node.name || "Anthropic Compatible",
+      name: node.name || translate("Anthropic Compatible"),
       color: "#D97757",
       textIcon: "AC",
     }))
@@ -337,7 +338,7 @@ export default function ProvidersPage() {
           <span className="material-symbols-outlined text-[32px] text-text-muted mb-2">
             search_off
           </span>
-          <p className="text-text-muted text-sm">No providers match your search</p>
+          <p className="text-text-muted text-sm">{translate("No providers match your search")}</p>
         </div>
       )}
 
@@ -345,7 +346,7 @@ export default function ProvidersPage() {
       <div className="flex flex-col gap-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <h2 className="text-lg sm:text-xl font-semibold flex items-center gap-2 leading-tight">
-            Custom Providers (OpenAI/Anthropic Compatible){" "}
+            {translate("Custom Providers (OpenAI/Anthropic Compatible)")}{" "}
           </h2>
           <div className="grid grid-cols-1 gap-2 sm:flex sm:w-auto">
             <Button
@@ -354,7 +355,7 @@ export default function ProvidersPage() {
               onClick={() => setShowAddAnthropicCompatibleModal(true)}
               className="w-full sm:w-auto"
             >
-              Add Anthropic Compatible
+              {translate("Add Anthropic Compatible")}
             </Button>
             <Button
               size="sm"
@@ -363,7 +364,7 @@ export default function ProvidersPage() {
               onClick={() => setShowAddCompatibleModal(true)}
               className="w-full !bg-white !text-black hover:!bg-gray-100 sm:w-auto"
             >
-              Add OpenAI Compatible
+              {translate("Add OpenAI Compatible")}
             </Button>
           </div>
         </div>
@@ -371,7 +372,7 @@ export default function ProvidersPage() {
         anthropicCompatibleProviders.length === 0 ? (
           <div className="flex items-center justify-center gap-2 py-2 border border-dashed border-border rounded-xl text-text-muted text-sm">
             <span className="material-symbols-outlined text-[18px]">extension</span>
-            <span>No custom providers — use buttons above to add OpenAI/Anthropic compatible endpoints</span>
+            <span>{translate("No custom providers — use buttons above to add OpenAI/Anthropic compatible endpoints")}</span>
           </div>
         ) : (
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-3 xl:grid-cols-4">
@@ -393,12 +394,12 @@ export default function ProvidersPage() {
         )}
       </div>
 
-      {/* OAuth Providers */}
+      {/* {translate("OAuth Providers")} */}
       {oauthEntries.length > 0 && (
       <div className="flex flex-col gap-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <h2 className="text-lg sm:text-xl font-semibold flex items-center gap-2 leading-tight">
-            OAuth Providers
+            {translate("OAuth Providers")}
           </h2>
           <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
             <ModelAvailabilityBadge />
@@ -410,15 +411,15 @@ export default function ProvidersPage() {
                   ? "bg-primary/20 border-primary/40 text-primary animate-pulse"
                   : "bg-bg border-border text-text-muted hover:text-text-main hover:border-primary/40"
               }`}
-              title="Test all OAuth connections"
-              aria-label="Test all OAuth connections"
+              title={translate("Test all OAuth connections")}
+              aria-label={translate("Test all OAuth connections")}
             >
               <span
                 className={`material-symbols-outlined text-[14px]${testingMode === "oauth" ? " animate-spin" : ""}`}
               >
                 play_arrow
               </span>
-              {testingMode === "oauth" ? "Testing..." : "Test All"}
+              {testingMode === "oauth" ? translate("Testing...") : translate("Test All")}
             </button>
           </div>
         </div>
@@ -437,12 +438,12 @@ export default function ProvidersPage() {
       </div>
       )}
 
-      {/* Free Tier Providers */}
+      {/* {translate("Free Tier Providers")} */}
       {(freeEntries.length > 0 || freeTierEntries.length > 0) && (
       <div className="flex flex-col gap-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <h2 className="text-lg sm:text-xl font-semibold flex items-center gap-2 leading-tight">
-            Free Tier Providers
+            {translate("Free Tier Providers")}
           </h2>
           <button
             onClick={() => handleBatchTest("free")}
@@ -452,15 +453,15 @@ export default function ProvidersPage() {
                 ? "bg-primary/20 border-primary/40 text-primary animate-pulse"
                 : "bg-bg border-border text-text-muted hover:text-text-main hover:border-primary/40"
             }`}
-            title="Test all Free connections"
-            aria-label="Test all Free provider connections"
+            title={translate("Test all Free connections")}
+            aria-label={translate("Test all Free provider connections")}
           >
             <span
               className={`material-symbols-outlined text-[14px]${testingMode === "free" ? " animate-spin" : ""}`}
             >
               play_arrow
             </span>
-            {testingMode === "free" ? "Testing..." : "Test All"}
+            {testingMode === "free" ? translate("Testing...") : translate("Test All")}
           </button>
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-3 xl:grid-cols-4">
@@ -503,7 +504,7 @@ export default function ProvidersPage() {
       <div className="flex flex-col gap-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <h2 className="text-lg sm:text-xl font-semibold flex items-center gap-2 leading-tight">
-            API Key Providers{" "}
+            {translate("API Key Providers")}{" "}
           </h2>
           <button
             onClick={() => handleBatchTest("apikey")}
@@ -513,15 +514,15 @@ export default function ProvidersPage() {
                 ? "bg-primary/20 border-primary/40 text-primary animate-pulse"
                 : "bg-bg border-border text-text-muted hover:text-text-main hover:border-primary/40"
             }`}
-            title="Test all API Key connections"
-            aria-label="Test all API Key connections"
+            title={translate("Test all API Key connections")}
+            aria-label={translate("Test all API Key connections")}
           >
             <span
               className={`material-symbols-outlined text-[14px]${testingMode === "apikey" ? " animate-spin" : ""}`}
             >
               play_arrow
             </span>
-            {testingMode === "apikey" ? "Testing..." : "Test All"}
+            {testingMode === "apikey" ? translate("Testing...") : translate("Test All")}
           </button>
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-3 xl:grid-cols-4">
@@ -542,7 +543,7 @@ export default function ProvidersPage() {
             className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-primary/40 px-3 py-2.5 text-sm font-medium text-primary transition-colors hover:border-primary hover:bg-primary/5"
           >
             <span className="material-symbols-outlined text-[16px]">expand_more</span>
-            Show all {apikeyEntries.length} providers
+            {translate("Show all")} {apikeyEntries.length} {translate("providers")}
           </button>
         )}
       </div>
@@ -600,11 +601,11 @@ export default function ProvidersPage() {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="sticky top-0 z-10 flex items-center justify-between px-5 py-3 border-b border-border bg-surface/95 backdrop-blur-sm rounded-t-xl">
-              <h3 className="font-semibold">Test Results</h3>
+              <h3 className="font-semibold">{translate("Test Results")}</h3>
               <button
                 onClick={() => setTestResults(null)}
                 className="p-1 rounded-lg hover:bg-bg text-text-muted hover:text-text-main transition-colors"
-                aria-label="Close test results"
+                aria-label={translate("Close test results")}
               >
                 <span className="material-symbols-outlined text-lg">close</span>
               </button>
@@ -670,11 +671,11 @@ function ProviderCard({ providerId, provider, stats, authType, onToggle }) {
                       <span className="material-symbols-outlined text-[12px]">
                         pause_circle
                       </span>
-                      Disabled
+                      {translate("Disabled")}
                     </span>
                   </Badge>
                 ) : isNoAuth ? (
-                  <Badge variant="success" size="sm" dot>Ready</Badge>
+                  <Badge variant="success" size="sm" dot>{translate("Ready")}</Badge>
                 ) : (
                   <>
                     {getStatusDisplay(connected, error, errorCode)}
@@ -700,7 +701,7 @@ function ProviderCard({ providerId, provider, stats, authType, onToggle }) {
                   size="sm"
                   checked={!allDisabled}
                   onChange={() => {}}
-                  title={allDisabled ? "Enable provider" : "Disable provider"}
+                  title={allDisabled ? translate("Enable provider") : translate("Disable provider")}
                 />
               </div>
             )}
@@ -798,7 +799,7 @@ function ApiKeyProviderCard({
                       <span className="material-symbols-outlined text-[12px]">
                         pause_circle
                       </span>
-                      Disabled
+                      {translate("Disabled")}
                     </span>
                   </Badge>
                 ) : (
@@ -807,13 +808,13 @@ function ApiKeyProviderCard({
                     {isCompatible && (
                       <Badge variant="default" size="sm">
                         {provider.apiType === "responses"
-                          ? "Responses"
-                          : "Chat"}
+                          ? translate("Responses")
+                          : translate("Chat")}
                       </Badge>
                     )}
                     {isAnthropicCompatible && (
                       <Badge variant="default" size="sm">
-                        Messages
+                        {translate("Messages")}
                       </Badge>
                     )}
                     {errorTime && (
@@ -838,7 +839,7 @@ function ApiKeyProviderCard({
                   size="sm"
                   checked={!allDisabled}
                   onChange={() => {}}
-                  title={allDisabled ? "Enable provider" : "Disable provider"}
+                  title={allDisabled ? translate("Enable provider") : translate("Disable provider")}
                 />
               </div>
             )}
@@ -884,28 +885,28 @@ function ProviderTestResultsView({ results }) {
   const items = results.results || [];
   const modeLabel =
     {
-      oauth: "OAuth",
-      free: "Free",
-      apikey: "API Key",
-      provider: "Provider",
-      all: "All",
+      oauth: translate("OAuth"),
+      free: translate("Free"),
+      apikey: translate("API Key"),
+      provider: translate("Provider"),
+      all: translate("All"),
     }[mode] || mode;
 
   return (
     <div className="flex min-w-0 flex-col gap-3">
       {summary && (
         <div className="flex flex-wrap items-center gap-2 text-xs mb-1 sm:gap-3">
-          <span className="text-text-muted">{modeLabel} Test</span>
+          <span className="text-text-muted">{modeLabel} {translate("Test")}</span>
           <span className="px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-400 font-medium">
-            {summary.passed} passed
+            {summary.passed} {translate("passed")}
           </span>
           {summary.failed > 0 && (
             <span className="px-2 py-0.5 rounded bg-red-500/15 text-red-400 font-medium">
-              {summary.failed} failed
+              {summary.failed} {translate("failed")}
             </span>
           )}
           <span className="text-text-muted sm:ml-auto">
-            {summary.total} tested
+            {summary.total} {translate("tested")}
           </span>
         </div>
       )}
@@ -945,7 +946,7 @@ function ProviderTestResultsView({ results }) {
       ))}
       {items.length === 0 && (
         <div className="text-center py-4 text-text-muted text-sm">
-          No active connections found for this group.
+          {translate("No active connections found for this group.")}
         </div>
       )}
     </div>

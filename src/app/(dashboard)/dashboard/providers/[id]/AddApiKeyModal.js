@@ -4,6 +4,7 @@ import { useState } from "react";
 import PropTypes from "prop-types";
 import { Button, Badge, Input, Modal, Select } from "@/shared/components";
 import { AI_PROVIDERS } from "@/shared/constants/providers";
+import { translate } from "@/i18n/runtime";
 
 const BULK_PLACEHOLDER = `name1|sk-key1\nname2|sk-key2\nsk-key-only-auto-named`;
 
@@ -12,7 +13,7 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
   const isOllamaLocal = provider === "ollama-local";
   const isCookie = authType === "cookie";
   const isXaiApiKey = provider === "xai" && !isCookie;
-  const credentialLabel = isCookie ? "Cookie Value" : "API Key";
+  const credentialLabel = isCookie ? translate("Cookie Value") : translate("API Key");
   const credentialPlaceholder = isCookie
     ? (provider === "grok-web" ? "sso=xxxxx... or just the raw value" : "eyJhbGciOi...")
     : (isXaiApiKey ? "xai-..." : "");
@@ -162,8 +163,8 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
       <div className="flex flex-col gap-4">
         {/* Mode switcher */}
         <div className="flex gap-2">
-          <Button size="sm" variant={mode === "single" ? "primary" : "ghost"} onClick={() => { setMode("single"); setBulkResult(null); }}>Single</Button>
-          <Button size="sm" variant={mode === "bulk" ? "primary" : "ghost"} onClick={() => { setMode("bulk"); setBulkResult(null); }}>Bulk Add</Button>
+          <Button size="sm" variant={mode === "single" ? "primary" : "ghost"} onClick={() => { setMode("single"); setBulkResult(null); }}>{translate("Single")}</Button>
+          <Button size="sm" variant={mode === "bulk" ? "primary" : "ghost"} onClick={() => { setMode("bulk"); setBulkResult(null); }}>{translate("Bulk Add")}</Button>
         </div>
 
         {mode === "bulk" && (
@@ -182,16 +183,16 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
             )}
             <div className="flex gap-2">
               <Button onClick={handleBulkSubmit} fullWidth disabled={saving || !bulkText.trim()}>
-                {saving ? "Adding..." : "Add All Keys"}
+                {saving ? translate("Adding...") : translate("Add All Keys")}
               </Button>
-              <Button onClick={onClose} variant="ghost" fullWidth>Cancel</Button>
+              <Button onClick={onClose} variant="ghost" fullWidth>{translate("Cancel")}</Button>
             </div>
           </div>
         )}
 
         {mode === "single" && (<>
         <Input
-          label="Name"
+          label={translate("Name")}
           value={formData.name}
           onChange={(e) => setFormData({ ...formData, name: e.target.value })}
           placeholder={isOllamaLocal ? "Ollama Local" : "Production Key"}
@@ -199,7 +200,7 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
         {isOllamaLocal && (
           <div className="flex gap-2">
             <Input
-              label="Ollama Host URL"
+              label={translate("Ollama Host URL")}
               value={formData.ollamaHostUrl}
               onChange={(e) => setFormData({ ...formData, ollamaHostUrl: e.target.value })}
               placeholder="http://localhost:11434"
@@ -207,7 +208,7 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
             />
             <div className="pt-6">
               <Button onClick={handleValidate} disabled={validating || saving} variant="secondary">
-                {validating ? "Checking..." : "Check"}
+                {validating ? translate("Checking...") : translate("Check")}
               </Button>
             </div>
           </div>
@@ -224,7 +225,7 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
             />
             <div className="pt-6">
               <Button onClick={handleValidate} disabled={!formData.apiKey || validating || saving} variant="secondary">
-                {validating ? "Checking..." : "Check"}
+                {validating ? translate("Checking...") : translate("Check")}
               </Button>
             </div>
           </div>
@@ -249,7 +250,7 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
         )}
         {providerRegions && (
           <Select
-            label="Region"
+            label={translate("Region")}
             value={region}
             onChange={(e) => setRegion(e.target.value)}
             options={providerRegions.map((r) => ({ value: r.id, label: r.label }))}
@@ -257,7 +258,7 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
         )}
         {isCompatible && (
           <Input
-            label="Default Model"
+            label={translate("Default Model")}
             value={formData.defaultModel}
             onChange={(e) => setFormData({ ...formData, defaultModel: e.target.value })}
             placeholder={isAnthropic ? "claude-3-5-sonnet-latest" : "gpt-4o-mini"}
@@ -270,7 +271,7 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
         )}
         {validationResult && (
           <Badge variant={validationResult === "success" ? "success" : "error"}>
-            {validationResult === "success" ? "Valid" : "Invalid"}
+            {validationResult === "success" ? translate("Valid") : translate("Invalid")}
           </Badge>
         )}
         {error && (
@@ -283,9 +284,9 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
         )}
         {isCloudflareAi && (
           <div className="bg-sidebar/50 p-4 rounded-lg border border-accent/20">
-            <h3 className="font-semibold mb-3 text-sm">Cloudflare Workers AI</h3>
+            <h3 className="font-semibold mb-3 text-sm">{translate("Cloudflare Workers AI")}</h3>
             <Input
-              label="Account ID"
+              label={translate("Account ID")}
               value={cloudflareData.accountId}
               onChange={(e) => setCloudflareData({ ...cloudflareData, accountId: e.target.value })}
               placeholder="abc123def456..."
@@ -297,28 +298,28 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
         )}
         {isAzure && (
           <div className="bg-sidebar/50 p-4 rounded-lg border border-accent/20">
-            <h3 className="font-semibold mb-3 text-sm">Azure OpenAI Configuration</h3>
+            <h3 className="font-semibold mb-3 text-sm">{translate("Azure OpenAI Configuration")}</h3>
             <div className="flex flex-col gap-3">
               <Input
-                label="Azure Endpoint"
+                label={translate("Azure Endpoint")}
                 value={azureData.azureEndpoint}
                 onChange={(e) => setAzureData({ ...azureData, azureEndpoint: e.target.value })}
                 placeholder="https://your-resource.openai.azure.com"
               />
               <Input
-                label="Deployment Name"
+                label={translate("Deployment Name")}
                 value={azureData.deployment}
                 onChange={(e) => setAzureData({ ...azureData, deployment: e.target.value })}
                 placeholder="gpt-4"
               />
               <Input
-                label="API Version"
+                label={translate("API Version")}
                 value={azureData.apiVersion}
                 onChange={(e) => setAzureData({ ...azureData, apiVersion: e.target.value })}
                 placeholder="2024-10-01-preview"
               />
               <Input
-                label="Organization"
+                label={translate("Organization")}
                 value={azureData.organization}
                 onChange={(e) => setAzureData({ ...azureData, organization: e.target.value })}
                 placeholder="Organization ID"
@@ -328,21 +329,21 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
         )}
 
         <Input
-          label="Priority"
+          label={translate("Priority")}
           type="number"
           value={formData.priority}
           onChange={(e) => setFormData({ ...formData, priority: Number.parseInt(e.target.value) || 1 })}
         />
 
         <Select
-          label="Proxy Pool"
+          label={translate("Proxy Pool")}
           value={formData.proxyPoolId}
           onChange={(e) => setFormData({ ...formData, proxyPoolId: e.target.value })}
           options={[
-            { value: NONE_PROXY_POOL_VALUE, label: "None" },
+            { value: NONE_PROXY_POOL_VALUE, label: translate("None") },
             ...(proxyPools || []).map((pool) => ({ value: pool.id, label: pool.name })),
           ]}
-          placeholder="None"
+          placeholder={translate("None")}
         />
 
         {(proxyPools || []).length === 0 && (
@@ -357,10 +358,10 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
 
         <div className="flex gap-2">
           <Button onClick={handleSubmit} fullWidth disabled={saving || (!isOllamaLocal && (!formData.name || !formData.apiKey)) || (isCompatible && !formData.defaultModel.trim()) || (isAzure && (!azureData.azureEndpoint || !azureData.deployment || !azureData.organization)) || (isCloudflareAi && !cloudflareData.accountId)}>
-            {saving ? "Saving..." : "Save"}
+            {saving ? translate("Saving...") : translate("Save")}
           </Button>
           <Button onClick={onClose} variant="ghost" fullWidth>
-            Cancel
+            {translate("Cancel")}
           </Button>
         </div>
         </>)}

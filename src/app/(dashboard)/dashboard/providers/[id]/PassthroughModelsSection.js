@@ -4,6 +4,7 @@ import { useState } from "react";
 import PropTypes from "prop-types";
 import { Button } from "@/shared/components";
 import { getProviderCustomModelRows } from "@/shared/utils/providerCustomModels";
+import { translate } from "@/i18n/runtime";
 
 function PassthroughModelRow({ modelId, fullModel, copied, onCopy, onDeleteAlias, onTest, testStatus, isTesting }) {
   const borderColor = testStatus === "ok"
@@ -42,7 +43,7 @@ function PassthroughModelRow({ modelId, fullModel, copied, onCopy, onDeleteAlias
               </span>
             </button>
             <span className="pointer-events-none absolute top-5 left-1/2 -translate-x-1/2 text-[10px] text-text-muted whitespace-nowrap opacity-0 group-hover/btn:opacity-100 transition-opacity">
-              {copied === `model-${modelId}` ? "Copied!" : "Copy"}
+              {translate(copied === `model-${modelId}` ? "Copied!" : "Copy")}
             </span>
           </div>
           {onTest && (
@@ -57,7 +58,7 @@ function PassthroughModelRow({ modelId, fullModel, copied, onCopy, onDeleteAlias
                 </span>
               </button>
               <span className="pointer-events-none absolute top-5 left-1/2 -translate-x-1/2 text-[10px] text-text-muted whitespace-nowrap opacity-0 group-hover/btn:opacity-100 transition-opacity">
-                {isTesting ? "Testing..." : "Test"}
+                {translate(isTesting ? "Testing..." : "Test")}
               </span>
             </div>
           )}
@@ -68,7 +69,7 @@ function PassthroughModelRow({ modelId, fullModel, copied, onCopy, onDeleteAlias
       <button
         onClick={onDeleteAlias}
         className="p-1 hover:bg-red-50 rounded text-red-500"
-        title="Remove model"
+        title={translate("Remove model")}
       >
         <span className="material-symbols-outlined text-sm">delete</span>
       </button>
@@ -103,7 +104,7 @@ export default function PassthroughModelsSection({ providerAlias, modelAliases, 
     const modelId = newModel.trim();
 
     if (allModels.some((model) => model.id === modelId)) {
-      alert("Model already exists for this provider.");
+      alert(translate("Model already exists for this provider."));
       return;
     }
 
@@ -121,13 +122,13 @@ export default function PassthroughModelsSection({ providerAlias, modelAliases, 
   return (
     <div className="flex flex-col gap-4">
       <p className="text-sm text-text-muted">
-        OpenRouter supports any model. Add models and create aliases for quick access.
+        {translate("OpenRouter supports any model. Add models and create aliases for quick access.")}
       </p>
 
       {/* Add new model */}
       <div className="flex items-end gap-2">
         <div className="flex-1">
-          <label htmlFor="new-model-input" className="text-xs text-text-muted mb-1 block">Model ID (from OpenRouter)</label>
+          <label htmlFor="new-model-input" className="text-xs text-text-muted mb-1 block">{translate("Model ID (from OpenRouter)")}</label>
           <input
             id="new-model-input"
             type="text"
@@ -139,7 +140,7 @@ export default function PassthroughModelsSection({ providerAlias, modelAliases, 
           />
         </div>
         <Button size="sm" icon="add" onClick={handleAdd} disabled={!newModel.trim() || adding}>
-          {adding ? "Adding..." : "Add"}
+          {translate(adding ? "Adding..." : "Add")}
         </Button>
       </div>
 

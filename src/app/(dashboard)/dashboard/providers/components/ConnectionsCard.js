@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { getStatusVariant as getConnectionStatusVariant } from "@/shared/utils/connectionStatus";
 import PropTypes from "prop-types";
 import { Card, Badge, Button, Modal, Select, Toggle, EditConnectionModal, ConfirmModal } from "@/shared/components";
+import { translate } from "@/i18n/runtime";
 
 // ── CooldownTimer ──────────────────────────────────────────────
 function CooldownTimer({ until }) {
@@ -90,7 +91,7 @@ function ConnectionRow({ connection, proxyPools, isOAuth, isFirst, isLast, onMov
   const getStatusVariant = () => getConnectionStatusVariant(connection.isActive, effectiveStatus);
 
   const displayName = isOAuth
-    ? connection.name || connection.email || connection.displayName || "OAuth Account"
+    ? connection.name || connection.email || connection.displayName || translate("OAuth Account")
     : connection.name;
 
   const handleSelectProxy = async (poolId) => {
@@ -115,9 +116,9 @@ function ConnectionRow({ connection, proxyPools, isOAuth, isFirst, isLast, onMov
           <p className="text-sm font-medium truncate">{displayName}</p>
           <div className="flex flex-wrap items-center gap-2 mt-1">
             <Badge variant={getStatusVariant()} size="sm" dot>
-              {connection.isActive === false ? "disabled" : (effectiveStatus || "Unknown")}
+              {connection.isActive === false ? translate("disabled") : (effectiveStatus || translate("Unknown"))}
             </Badge>
-            {hasAnyProxy && <Badge variant={proxyBadgeVariant} size="sm">Proxy</Badge>}
+            {hasAnyProxy && <Badge variant={proxyBadgeVariant} size="sm">{translate("Proxy")}</Badge>}
             {isCooldown && connection.isActive !== false && <CooldownTimer until={modelLockUntil} />}
             {connection.lastError && connection.isActive !== false && (isCooldown || effectiveStatus === "error" || effectiveStatus === "expired") && (
               <span className="text-xs text-red-500 truncate max-w-[300px]" title={connection.lastError}>{connection.lastError}</span>
@@ -143,11 +144,11 @@ function ConnectionRow({ connection, proxyPools, isOAuth, isFirst, isLast, onMov
                 disabled={updatingProxy}
               >
                 <span className="material-symbols-outlined text-[18px]">{updatingProxy ? "progress_activity" : "lan"}</span>
-                <span className="text-[10px] leading-tight">Proxy</span>
+                <span className="text-[10px] leading-tight">{translate("Proxy")}</span>
               </button>
               {showProxyDropdown && (
                 <div className="absolute right-0 top-full mt-1 z-50 bg-bg border border-border rounded-lg shadow-lg py-1 min-w-[160px]">
-                  <button onClick={() => handleSelectProxy("__none__")} className={`w-full text-left px-3 py-1.5 text-sm hover:bg-black/5 dark:hover:bg-white/5 ${!boundProxyPoolId ? "text-primary font-medium" : "text-text-main"}`}>None</button>
+                  <button onClick={() => handleSelectProxy("__none__")} className={`w-full text-left px-3 py-1.5 text-sm hover:bg-black/5 dark:hover:bg-white/5 ${!boundProxyPoolId ? "text-primary font-medium" : "text-text-main"}`}>{translate("None")}</button>
                   {(proxyPools || []).map((pool) => (
                     <button key={pool.id} onClick={() => handleSelectProxy(pool.id)} className={`w-full text-left px-3 py-1.5 text-sm hover:bg-black/5 dark:hover:bg-white/5 ${boundProxyPoolId === pool.id ? "text-primary font-medium" : "text-text-main"}`}>{pool.name}</button>
                   ))}
@@ -157,14 +158,14 @@ function ConnectionRow({ connection, proxyPools, isOAuth, isFirst, isLast, onMov
           )}
           <button onClick={onEdit} className="flex flex-col items-center px-2 py-1 rounded hover:bg-black/5 dark:hover:bg-white/5 text-text-muted hover:text-primary">
             <span className="material-symbols-outlined text-[18px]">edit</span>
-            <span className="text-[10px] leading-tight">Edit</span>
+            <span className="text-[10px] leading-tight">{translate("Edit")}</span>
           </button>
           <button onClick={onDelete} className="flex flex-col items-center px-2 py-1 rounded hover:bg-red-500/10 text-red-500">
             <span className="material-symbols-outlined text-[18px]">delete</span>
-            <span className="text-[10px] leading-tight">Delete</span>
+            <span className="text-[10px] leading-tight">{translate("Delete")}</span>
           </button>
         </div>
-        <Toggle size="sm" checked={connection.isActive ?? true} onChange={onToggleActive} title={(connection.isActive ?? true) ? "Disable" : "Enable"} />
+        <Toggle size="sm" checked={connection.isActive ?? true} onChange={onToggleActive} title={(connection.isActive ?? true) ? translate("Disable") : translate("Enable")} />
       </div>
     </div>
   );
@@ -245,39 +246,39 @@ function AddApiKeyModal({ isOpen, provider, providerName, proxyPools, onSave, on
   if (!provider) return null;
 
   return (
-    <Modal isOpen={isOpen} title={`Add ${providerName || provider} API Key`} onClose={onClose}>
+    <Modal isOpen={isOpen} title={`${translate("Add")} ${providerName || provider} ${translate("API Key")}`} onClose={onClose}>
       <div className="flex flex-col gap-4">
         <div>
-          <label className="text-xs text-text-muted mb-1 block">Name</label>
-          <input className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-background focus:outline-none focus:border-primary" value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} placeholder="Production Key" />
+          <label className="text-xs text-text-muted mb-1 block">{translate("Name")}</label>
+          <input className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-background focus:outline-none focus:border-primary" value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} placeholder={translate("Production Key")} />
         </div>
         <div className="flex gap-2">
           <div className="flex-1">
-            <label className="text-xs text-text-muted mb-1 block">API Key</label>
+            <label className="text-xs text-text-muted mb-1 block">{translate("API Key")}</label>
             <input type="password" className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-background focus:outline-none focus:border-primary" value={formData.apiKey} onChange={(e) => setFormData({ ...formData, apiKey: e.target.value })} />
           </div>
           <div className="pt-6">
             <Button onClick={handleValidate} disabled={!formData.apiKey || validating || saving} variant="secondary">
-              {validating ? "Checking..." : "Check"}
+              {validating ? translate("Checking...") : translate("Check")}
             </Button>
           </div>
         </div>
         {validationResult && (
           <Badge variant={validationResult === "success" ? "success" : "error"}>
-            {validationResult === "success" ? "Valid" : "Invalid"}
+            {validationResult === "success" ? translate("Valid") : translate("Invalid")}
           </Badge>
         )}
         <div>
-          <label className="text-xs text-text-muted mb-1 block">Priority</label>
+          <label className="text-xs text-text-muted mb-1 block">{translate("Priority")}</label>
           <input type="number" className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-background focus:outline-none focus:border-primary" value={formData.priority} onChange={(e) => setFormData({ ...formData, priority: Number.parseInt(e.target.value) || 1 })} />
         </div>
-        <Select label="Proxy Pool" value={formData.proxyPoolId} onChange={(e) => setFormData({ ...formData, proxyPoolId: e.target.value })}
-          options={[{ value: NONE, label: "None" }, ...(proxyPools || []).map((p) => ({ value: p.id, label: p.name }))]} />
+        <Select label={translate("Proxy Pool")} value={formData.proxyPoolId} onChange={(e) => setFormData({ ...formData, proxyPoolId: e.target.value })}
+          options={[{ value: NONE, label: translate("None") }, ...(proxyPools || []).map((p) => ({ value: p.id, label: p.name }))]} />
         <div className="flex gap-2">
           <Button onClick={handleSubmit} fullWidth disabled={!formData.name || !formData.apiKey || saving}>
-            {saving ? "Saving..." : "Save"}
+            {saving ? translate("Saving...") : translate("Save")}
           </Button>
-          <Button onClick={onClose} variant="ghost" fullWidth>Cancel</Button>
+          <Button onClick={onClose} variant="ghost" fullWidth>{translate("Cancel")}</Button>
         </div>
       </div>
     </Modal>
@@ -356,8 +357,8 @@ export default function ConnectionsCard({ providerId, isOAuth }) {
 
   const handleDelete = async (id) => {
     setConfirmState({
-      title: "Delete Connection",
-      message: "Delete this connection?",
+      title: translate("Delete Connection"),
+      message: translate("Delete this connection?"),
       onConfirm: async () => {
         setConfirmState(null);
         try {
@@ -402,9 +403,9 @@ export default function ConnectionsCard({ providerId, isOAuth }) {
     <>
       <Card>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4">
-          <h2 className="text-lg font-semibold">Connections</h2>
+          <h2 className="text-lg font-semibold">{translate("Connections")}</h2>
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs text-text-muted font-medium">Round Robin</span>
+            <span className="text-xs text-text-muted font-medium">{translate("Round Robin")}</span>
             <Toggle
               checked={providerStrategy === "round-robin"}
               onChange={(enabled) => {
@@ -416,7 +417,7 @@ export default function ConnectionsCard({ providerId, isOAuth }) {
             />
             {providerStrategy === "round-robin" && (
               <div className="flex flex-wrap items-center gap-1.5">
-                <span className="text-xs text-text-muted">Sticky:</span>
+                <span className="text-xs text-text-muted">{translate("Sticky:")}</span>
                 <input
                   type="number" min={1} value={providerStickyLimit}
                   onChange={(e) => { setProviderStickyLimit(e.target.value); saveStrategy("round-robin", e.target.value); }}
@@ -429,8 +430,8 @@ export default function ConnectionsCard({ providerId, isOAuth }) {
 
         {connections.length === 0 ? (
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-sm text-text-muted">No connections yet</p>
-            <Button size="sm" icon="add" onClick={() => setShowAddModal(true)}>Add Connection</Button>
+            <p className="text-sm text-text-muted">{translate("No connections yet")}</p>
+            <Button size="sm" icon="add" onClick={() => setShowAddModal(true)}>{translate("Add Connection")}</Button>
           </div>
         ) : (
           <>
@@ -453,7 +454,7 @@ export default function ConnectionsCard({ providerId, isOAuth }) {
               ))}
             </div>
             <div className="mt-4 flex justify-stretch sm:justify-start">
-              <Button size="sm" icon="add" onClick={() => setShowAddModal(true)}>Add</Button>
+              <Button size="sm" icon="add" onClick={() => setShowAddModal(true)}>{translate("Add")}</Button>
             </div>
           </>
         )}
@@ -479,7 +480,7 @@ export default function ConnectionsCard({ providerId, isOAuth }) {
         isOpen={!!confirmState}
         onClose={() => setConfirmState(null)}
         onConfirm={confirmState?.onConfirm}
-        title={confirmState?.title || "Confirm"}
+        title={confirmState?.title || translate("Confirm")}
         message={confirmState?.message}
         variant="danger"
       />

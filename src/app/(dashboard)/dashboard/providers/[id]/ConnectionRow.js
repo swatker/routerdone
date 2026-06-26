@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { getStatusVariant as getConnectionStatusVariant } from "@/shared/utils/connectionStatus";
 import PropTypes from "prop-types";
 import { Badge, Toggle, Tooltip } from "@/shared/components";
+import { translate } from "@/i18n/runtime";
 import CooldownTimer from "./CooldownTimer";
 
 export default function ConnectionRow({ connection, proxyPools, isOAuth, isFirst, isLast, onMoveUp, onMoveDown, onToggleActive, onUpdateProxy, onEdit, onDelete, oneByOneStatus = null, autoPing = null }) {
@@ -70,11 +71,11 @@ export default function ConnectionRow({ connection, proxyPools, isOAuth, isFirst
   const isOAuthConnection = rowAuthType === "oauth";
   const isCookieConnection = rowAuthType === "cookie";
   const authIcon = isCookieConnection ? "cookie" : isOAuthConnection ? "lock" : "key";
-  const authLabel = isOAuthConnection ? "OAuth" : isCookieConnection ? "Cookie" : "API Key";
+  const authLabel = isOAuthConnection ? translate("OAuth") : isCookieConnection ? translate("Cookie") : translate("API Key");
   const displayName = connection.name?.trim()
     || connection.email?.trim()
     || connection.displayName?.trim()
-    || (isOAuthConnection ? "OAuth Account" : isCookieConnection ? "Cookie Account" : "API Key");
+    || (isOAuthConnection ? translate("OAuth Account") : isCookieConnection ? translate("Cookie Account") : translate("API Key"));
   const secondaryDisplayName = connection.name?.trim() && connection.email?.trim() && connection.name.trim() !== connection.email.trim()
     ? connection.email.trim()
     : connection.name?.trim() && connection.displayName?.trim() && connection.name.trim() !== connection.displayName.trim()
@@ -117,7 +118,7 @@ export default function ConnectionRow({ connection, proxyPools, isOAuth, isFirst
 
   const getOneByOneVariant = () => {
     if (!oneByOneStatus) return "default";
-    if (oneByOneStatus.state === "success") return "success";
+    if (oneByOneStatus.state === "success") return translate("success");
     if (oneByOneStatus.state === "failed") return "error";
     if (oneByOneStatus.state === "testing") return "primary";
     return "default";
@@ -125,10 +126,10 @@ export default function ConnectionRow({ connection, proxyPools, isOAuth, isFirst
 
   const getOneByOneLabel = () => {
     if (!oneByOneStatus) return null;
-    if (oneByOneStatus.state === "queued") return "queued";
-    if (oneByOneStatus.state === "testing") return "testing";
-    if (oneByOneStatus.state === "success") return "success";
-    if (oneByOneStatus.state === "failed") return oneByOneStatus.error ? `failed: ${oneByOneStatus.error}` : "failed";
+    if (oneByOneStatus.state === "queued") return translate("queued");
+    if (oneByOneStatus.state === "testing") return translate("testing");
+    if (oneByOneStatus.state === "success") return translate("success");
+    if (oneByOneStatus.state === "failed") return oneByOneStatus.error ? `${translate("failed")}: ${oneByOneStatus.error}` : translate("failed");
     return null;
   };
 
@@ -162,14 +163,14 @@ export default function ConnectionRow({ connection, proxyPools, isOAuth, isFirst
           )}
           <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5 sm:gap-2">
             <Badge variant={getStatusVariant()} size="sm" dot>
-              {connection.isActive === false ? "disabled" : (effectiveStatus || "Unknown")}
+              {connection.isActive === false ? translate("disabled") : (effectiveStatus || translate("Unknown"))}
             </Badge>
             <Badge variant="default" size="sm">
               {authLabel}
             </Badge>
             {hasAnyProxy && (
               <Badge variant={proxyBadgeVariant} size="sm">
-                Proxy
+                {translate("Proxy")}
               </Badge>
             )}
             {isCooldown && connection.isActive !== false && <CooldownTimer until={modelLockUntil} />}
@@ -220,7 +221,7 @@ export default function ConnectionRow({ connection, proxyPools, isOAuth, isFirst
                 <span className="material-symbols-outlined text-[18px]">
                   {updatingProxy ? "progress_activity" : "lan"}
                 </span>
-                <span className="text-[10px] leading-tight">Proxy</span>
+                <span className="text-[10px] leading-tight">{translate("Proxy")}</span>
               </button>
               {showProxyDropdown && (
                 <div className="absolute right-0 top-full z-50 mt-1 max-w-[78vw] min-w-[160px] rounded-lg border border-border bg-bg py-1 shadow-lg">
@@ -228,7 +229,7 @@ export default function ConnectionRow({ connection, proxyPools, isOAuth, isFirst
                     onClick={() => handleSelectProxy("__none__")}
                     className={`w-full text-left px-3 py-1.5 text-sm hover:bg-black/5 dark:hover:bg-white/5 ${!boundProxyPoolId ? "text-primary font-medium" : "text-text-main"}`}
                   >
-                    None
+                    {translate("None")}
                   </button>
                   {(proxyPools || []).map((pool) => (
                     <button
@@ -244,30 +245,30 @@ export default function ConnectionRow({ connection, proxyPools, isOAuth, isFirst
             </div>
           )}
           {autoPing && (
-            <Tooltip text="When your 5h quota runs out, auto-sends a request the moment it resets so a new window starts right away.">
+            <Tooltip text={translate("When your 5h quota runs out, auto-sends a request the moment it resets so a new window starts right away.")}>
               <button
                 onClick={() => autoPing.onToggle(!autoPing.on)}
                 className={`flex w-full flex-col items-center rounded px-2 py-1 transition-colors hover:bg-black/5 dark:hover:bg-white/5 ${autoPing.on ? "text-primary" : "text-text-muted hover:text-primary"}`}
               >
                 <span className="material-symbols-outlined text-[18px]">bolt</span>
-                <span className="text-[10px] leading-tight">Auto-ping</span>
+                <span className="text-[10px] leading-tight">{translate("Auto-ping")}</span>
               </button>
             </Tooltip>
           )}
           <button onClick={onEdit} className="flex flex-col items-center rounded px-2 py-1 text-text-muted hover:bg-black/5 hover:text-primary dark:hover:bg-white/5">
             <span className="material-symbols-outlined text-[18px]">edit</span>
-            <span className="text-[10px] leading-tight">Edit</span>
+            <span className="text-[10px] leading-tight">{translate("Edit")}</span>
           </button>
           <button onClick={onDelete} className="flex flex-col items-center rounded px-2 py-1 text-red-500 hover:bg-red-500/10">
             <span className="material-symbols-outlined text-[18px]">delete</span>
-            <span className="text-[10px] leading-tight">Delete</span>
+            <span className="text-[10px] leading-tight">{translate("Delete")}</span>
           </button>
         </div>
         <Toggle
           size="sm"
           checked={connection.isActive ?? true}
           onChange={onToggleActive}
-          title={(connection.isActive ?? true) ? "Disable connection" : "Enable connection"}
+          title={(connection.isActive ?? true) ? translate("Disable connection") : translate("Enable connection")}
         />
       </div>
     </div>

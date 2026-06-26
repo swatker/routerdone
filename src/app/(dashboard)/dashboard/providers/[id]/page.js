@@ -186,7 +186,7 @@ export default function ProviderDetailPage() {
   const handleDisableAll = async (ids) => {
     if (!ids.length) return;
     setConfirmState({
-      title: "Disable All Models",
+      title: translate("Disable All Models"),
       message: `Disable all ${ids.length} model(s)?`,
       onConfirm: async () => {
         setConfirmState(null);
@@ -1060,7 +1060,7 @@ export default function ProviderDetailPage() {
           className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-primary/40 px-3 py-2 text-xs text-primary transition-colors hover:border-primary hover:bg-primary/5 sm:w-auto"
         >
           <span className="material-symbols-outlined text-sm">add</span>
-          Add Model
+          {translate("Add Model")}
         </button>
 
         {/* Import Qoder models button — only show for qoder provider */}
@@ -1145,9 +1145,9 @@ export default function ProviderDetailPage() {
   if (!providerInfo) {
     return (
       <div className="text-center py-20">
-        <p className="text-text-muted">Provider not found</p>
+        <p className="text-text-muted">{translate("Provider not found")}</p>
         <Link href="/dashboard/providers" className="text-primary mt-4 inline-block">
-          Back to Providers
+          {translate("Back to Providers")}
         </Link>
       </div>
     );
@@ -1246,9 +1246,9 @@ export default function ProviderDetailPage() {
         <Card>
           <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="min-w-0">
-              <h2 className="text-lg font-semibold">{isAnthropicCompatible ? "Anthropic Compatible Details" : "OpenAI Compatible Details"}</h2>
+              <h2 className="text-lg font-semibold">{translate(isAnthropicCompatible ? "Anthropic Compatible Details" : "OpenAI Compatible Details")}</h2>
               <p className="break-all text-sm text-text-muted">
-                {isAnthropicCompatible ? "Messages API" : (providerNode.apiType === "responses" ? "Responses API" : "Chat Completions")} · {(providerNode.baseUrl || "").replace(/\/$/, "")}/
+                {translate(isAnthropicCompatible ? "Messages API" : (providerNode.apiType === "responses" ? "Responses API" : "Chat Completions"))} · {(providerNode.baseUrl || "").replace(/\/$/, "")}/
                 {isAnthropicCompatible ? "messages" : (providerNode.apiType === "responses" ? "responses" : "chat/completions")}
               </p>
             </div>
@@ -1262,7 +1262,7 @@ export default function ProviderDetailPage() {
                 }}
                 className="w-full sm:w-auto"
               >
-                Add API Key
+                {translate("Add API Key")}
               </Button>
               <Button
                 size="sm"
@@ -1271,7 +1271,7 @@ export default function ProviderDetailPage() {
                 onClick={() => setShowEditNodeModal(true)}
                 className="w-full sm:w-auto"
               >
-                Edit
+                {translate("Edit")}
               </Button>
               <Button
                 size="sm"
@@ -1279,8 +1279,8 @@ export default function ProviderDetailPage() {
                 icon="delete"
                 onClick={async () => {
                   setConfirmState({
-                    title: "Delete Compatible Node",
-                    message: `Delete this ${isAnthropicCompatible ? "Anthropic" : "OpenAI"} Compatible node?`,
+                    title: translate("Delete Compatible Node"),
+                    message: translate(isAnthropicCompatible ? "Delete this Anthropic Compatible node?" : "Delete this OpenAI Compatible node?"),
                     onConfirm: async () => {
                       setConfirmState(null);
                       try {
@@ -1296,7 +1296,7 @@ export default function ProviderDetailPage() {
                 }}
                 className="w-full sm:w-auto"
               >
-                Delete
+                {translate("Delete")}
               </Button>
             </div>
           </div>
@@ -1413,7 +1413,7 @@ export default function ProviderDetailPage() {
                   <>
                     {!isCompatible && providerId === "iflow" && (
                       <Button size="sm" icon="cookie" variant="secondary" onClick={() => setShowIFlowCookieModal(true)}>
-                        Cookie
+                        {translate("Cookie")}
                       </Button>
                     )}
                     {providerId === "codex" && (
@@ -1426,7 +1426,7 @@ export default function ProviderDetailPage() {
                       icon="add"
                       onClick={triggerAddConnection}
                     >
-                      {isCompatible ? "Add API Key" : (providerId === "iflow" ? "OAuth" : "Add Connection")}
+                      {translate(isCompatible ? "Add API Key" : (providerId === "iflow" ? "OAuth" : "Add Connection"))}
                     </Button>
                   </>
                 )}
@@ -1437,15 +1437,15 @@ export default function ProviderDetailPage() {
               {oneByOneSummary && (
                 <div className="mb-4 rounded-lg border border-black/10 bg-black/[0.02] px-3 py-2 text-xs text-text-muted dark:border-white/10 dark:bg-white/[0.03]">
                   <div className="flex flex-wrap items-center gap-3">
-                    <span>Total: {oneByOneSummary.total}</span>
-                    <span>Completed: {oneByOneSummary.completed}</span>
-                    <span>Passed: {oneByOneSummary.passed}</span>
-                    <span>Failed: {oneByOneSummary.failed}</span>
+                    <span>{translate("Total:")} {oneByOneSummary.total}</span>
+                    <span>{translate("Completed:")} {oneByOneSummary.completed}</span>
+                    <span>{translate("Passed:")} {oneByOneSummary.passed}</span>
+                    <span>{translate("Failed:")} {oneByOneSummary.failed}</span>
                     {oneByOneSummary.stopped && (
-                      <span className="text-amber-600 dark:text-amber-400">Stopped</span>
+                      <span className="text-amber-600 dark:text-amber-400">{translate("Stopped")}</span>
                     )}
                     {oneByOneRunning && oneByOneCurrentConnectionId && (
-                      <span>Running: {connections.find((conn) => conn.id === oneByOneCurrentConnectionId)?.name || oneByOneCurrentConnectionId}</span>
+                      <span>{translate("Running:")} {connections.find((conn) => conn.id === oneByOneCurrentConnectionId)?.name || oneByOneCurrentConnectionId}</span>
                     )}
                   </div>
                 </div>
@@ -1459,7 +1459,7 @@ export default function ProviderDetailPage() {
                       icon="cookie"
                       variant="secondary"
                       onClick={() => setShowIFlowCookieModal(true)}
-                      title="Add connection using browser cookie"
+                      title={translate("Add connection using browser cookie")}
                       className="w-full sm:w-auto"
                     >
                       Cookie
@@ -1518,7 +1518,7 @@ export default function ProviderDetailPage() {
       <Card>
         <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <h2 className="text-lg font-semibold">
-            {"Available Models"}
+            {translate("Available Models")}
           </h2>
           {!isCompatible && (() => {
             const allIds = [
@@ -1530,12 +1530,12 @@ export default function ProviderDetailPage() {
               <div className="flex gap-2">
                 {disabledModelIds.length > 0 && (
                   <Button size="sm" variant="secondary" icon="restart_alt" onClick={handleEnableAll}>
-                    Active All
+                    {translate("Active All")}
                   </Button>
                 )}
                 {activeIds.length > 0 && (
                   <Button size="sm" variant="secondary" icon="block" onClick={() => handleDisableAll(activeIds)}>
-                    Disable All
+                    {translate("Disable All")}
                   </Button>
                 )}
               </div>

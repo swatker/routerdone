@@ -10,12 +10,13 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { Button } from "@/shared/components";
 import { useNotificationStore } from "@/store/notificationStore";
+import { translate } from "@/i18n/runtime";
 
 const STATUS_CONFIG = {
-  available: { icon: "check_circle", color: "#22c55e", label: "Available" },
-  cooldown: { icon: "schedule", color: "#f59e0b", label: "Cooldown" },
-  unavailable: { icon: "error", color: "#ef4444", label: "Unavailable" },
-  unknown: { icon: "help", color: "#6b7280", label: "Unknown" },
+  available: { icon: "check_circle", color: "#22c55e", label: translate("Available") },
+  cooldown: { icon: "schedule", color: "#f59e0b", label: translate("Cooldown") },
+  unavailable: { icon: "error", color: "#ef4444", label: translate("Unavailable") },
+  unknown: { icon: "help", color: "#6b7280", label: translate("Unknown") },
 };
 
 export default function ModelAvailabilityBadge() {
@@ -64,13 +65,13 @@ export default function ModelAvailabilityBadge() {
         body: JSON.stringify({ action: "clearCooldown", provider, model }),
       });
       if (res.ok) {
-        notify.success(`Cooldown cleared for ${model}`);
+        notify.success(translate("Cooldown cleared for") + ` ${model}`);
         await fetchStatus();
       } else {
-        notify.error("Failed to clear cooldown");
+        notify.error(translate("Failed to clear cooldown"));
       }
     } catch {
-      notify.error("Failed to clear cooldown");
+      notify.error(translate("Failed to clear cooldown"));
     } finally {
       setClearing(null);
     }
@@ -119,12 +120,12 @@ export default function ModelAvailabilityBadge() {
               >
                 {isHealthy ? "verified" : "warning"}
               </span>
-              <span className="text-sm font-semibold text-text-main">Model Status</span>
+              <span className="text-sm font-semibold text-text-main">{translate("Model Status")}</span>
             </div>
             <button
               onClick={fetchStatus}
               className="p-1 rounded-lg hover:bg-surface text-text-muted hover:text-text-main transition-colors"
-              title="Refresh"
+              title={translate("Refresh")}
             >
               <span className="material-symbols-outlined text-[14px]">refresh</span>
             </button>
@@ -133,7 +134,7 @@ export default function ModelAvailabilityBadge() {
           <div className="px-4 py-3 max-h-60 overflow-y-auto">
             {isHealthy ? (
               <p className="text-sm text-text-muted text-center py-2">
-                All models are responding normally.
+                {translate("All models are responding normally.")}
               </p>
             ) : (
               <div className="flex flex-col gap-2.5">
@@ -166,7 +167,7 @@ export default function ModelAvailabilityBadge() {
                                 disabled={isClearing}
                                 className="text-[10px] px-1.5! py-0.5! ml-2"
                               >
-                                {isClearing ? "..." : "Clear"}
+                                {isClearing ? "..." : translate("Clear")}
                               </Button>
                             )}
                           </div>

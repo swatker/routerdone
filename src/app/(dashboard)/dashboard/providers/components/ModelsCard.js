@@ -6,6 +6,7 @@ import { Card, Button, Modal } from "@/shared/components";
 import { getModelsByProviderId, getModelKind } from "@/shared/constants/models";
 import { getProviderAlias } from "@/shared/constants/providers";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
+import { translate } from "@/i18n/runtime";
 
 // ── ModelRow ───────────────────────────────────────────────────
 export function ModelRow({ model, fullModel, copied, onCopy, testStatus, isCustom, isFree, onDeleteAlias, onTest, isTesting }) {
@@ -30,7 +31,7 @@ export function ModelRow({ model, fullModel, copied, onCopy, testStatus, isCusto
               </span>
             </button>
             <span className="pointer-events-none absolute mt-1 top-5 left-1/2 -translate-x-1/2 text-[10px] text-text-muted whitespace-nowrap opacity-0 group-hover/btn:opacity-100 transition-opacity">
-              {isTesting ? "Testing..." : "Test"}
+              {isTesting ? translate("Testing...") : translate("Test")}
             </span>
           </div>
         )}
@@ -39,12 +40,12 @@ export function ModelRow({ model, fullModel, copied, onCopy, testStatus, isCusto
             <span className="material-symbols-outlined text-sm">{copied === `model-${model.id}` ? "check" : "content_copy"}</span>
           </button>
           <span className="pointer-events-none absolute mt-1 top-5 left-1/2 -translate-x-1/2 text-[10px] text-text-muted whitespace-nowrap opacity-0 group-hover/btn:opacity-100 transition-opacity">
-            {copied === `model-${model.id}` ? "Copied!" : "Copy"}
+            {copied === `model-${model.id}` ? translate("Copied!") : translate("Copy")}
           </span>
         </div>
-        {isFree && <span className="text-[10px] font-bold text-green-500 bg-green-500/10 px-1.5 py-0.5 rounded">FREE</span>}
+        {isFree && <span className="text-[10px] font-bold text-green-500 bg-green-500/10 px-1.5 py-0.5 rounded">{translate("FREE")}</span>}
         {isCustom && (
-          <button onClick={onDeleteAlias} className="p-0.5 hover:bg-red-500/10 rounded text-text-muted hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity ml-auto" title="Remove custom model">
+          <button onClick={onDeleteAlias} className="p-0.5 hover:bg-red-500/10 rounded text-text-muted hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity ml-auto" title={translate("Remove custom model")}>
             <span className="material-symbols-outlined text-sm">close</span>
           </button>
         )}
@@ -77,10 +78,10 @@ function AddCustomModelModal({ isOpen, onSave, onClose }) {
   };
 
   return (
-    <Modal isOpen={isOpen} title="Add Custom Model" onClose={onClose}>
+    <Modal isOpen={isOpen} title={translate("Add Custom Model")} onClose={onClose}>
       <div className="flex flex-col gap-4">
         <div>
-          <label className="text-xs text-text-muted mb-1 block">Model ID</label>
+          <label className="text-xs text-text-muted mb-1 block">{translate("Model ID")}</label>
           <input
             className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-background focus:outline-none focus:border-primary"
             value={modelId}
@@ -91,8 +92,8 @@ function AddCustomModelModal({ isOpen, onSave, onClose }) {
           />
         </div>
         <div className="flex gap-2">
-          <Button onClick={handleSave} fullWidth disabled={!modelId.trim()}>Add</Button>
-          <Button onClick={onClose} variant="ghost" fullWidth>Cancel</Button>
+          <Button onClick={handleSave} fullWidth disabled={!modelId.trim()}>{translate("Add")}</Button>
+          <Button onClick={onClose} variant="ghost" fullWidth>{translate("Cancel")}</Button>
         </div>
       </div>
     </Modal>
@@ -194,10 +195,10 @@ export default function ModelsCard({ providerId, kindFilter, providerAliasOverri
       });
       const data = await res.json();
       setModelTestResults((prev) => ({ ...prev, [modelId]: data.ok ? "ok" : "error" }));
-      setTestError(data.ok ? "" : (data.error || "Model not reachable"));
+      setTestError(data.ok ? "" : (data.error || translate("Model not reachable")));
     } catch {
       setModelTestResults((prev) => ({ ...prev, [modelId]: "error" }));
-      setTestError("Network error");
+      setTestError(translate("Network error"));
     } finally { setTestingModelId(null); }
   };
 
@@ -223,7 +224,7 @@ export default function ModelsCard({ providerId, kindFilter, providerAliasOverri
     <>
       <Card>
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold">Models{kindFilter ? ` — ${kindFilter.toUpperCase()}` : ""}</h2>
+          <h2 className="text-lg font-semibold">{translate("Models")}{kindFilter ? ` — ${kindFilter.toUpperCase()}` : ""}</h2>
         </div>
         {testError && <p className="text-xs text-red-500 mb-3 break-words">{testError}</p>}
 
@@ -270,7 +271,7 @@ export default function ModelsCard({ providerId, kindFilter, providerAliasOverri
             className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-dashed border-black/15 dark:border-white/15 text-xs text-text-muted hover:text-primary hover:border-primary/40 transition-colors"
           >
             <span className="material-symbols-outlined text-sm">add</span>
-            Add Model
+            {translate("Add Model")}
           </button>
         </div>
       </Card>

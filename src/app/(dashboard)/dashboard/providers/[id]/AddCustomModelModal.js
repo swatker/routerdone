@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import PropTypes from "prop-types";
 import { Button, Modal } from "@/shared/components";
+import { translate } from "@/i18n/runtime";
 
 export default function AddCustomModelModal({ isOpen, providerAlias, providerDisplayAlias, onSave, onClose }) {
   const [modelId, setModelId] = useState("");
@@ -57,10 +58,10 @@ export default function AddCustomModelModal({ isOpen, providerAlias, providerDis
   };
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Add Custom Model">
+    <Modal isOpen={isOpen} onClose={onClose} title={translate("Add Custom Model")}>
       <div className="flex flex-col gap-4">
         <div>
-          <label className="text-sm font-medium mb-1.5 block">Model ID</label>
+          <label className="text-sm font-medium mb-1.5 block">{translate("Model ID")}</label>
           <div className="flex gap-2">
             <input
               type="text"
@@ -78,11 +79,11 @@ export default function AddCustomModelModal({ isOpen, providerAlias, providerDis
               onClick={handleTest}
               disabled={!modelId.trim() || testStatus === "testing"}
             >
-              {testStatus === "testing" ? "Testing..." : "Test"}
+              {translate(testStatus === "testing" ? "Testing..." : "Test")}
             </Button>
           </div>
           <p className="text-xs text-text-muted mt-1">
-            Sent to provider as: <code className="font-mono bg-sidebar px-1 rounded">{stripAlias(modelId.trim()) || "model-id"}</code>
+            {translate("Sent to provider as:")} <code className="font-mono bg-sidebar px-1 rounded">{stripAlias(modelId.trim()) || "model-id"}</code>
           </p>
         </div>
 
@@ -90,25 +91,25 @@ export default function AddCustomModelModal({ isOpen, providerAlias, providerDis
         {testStatus === "ok" && (
           <div className="flex items-center gap-2 text-sm text-green-600">
             <span className="material-symbols-outlined text-base">check_circle</span>
-            Model is reachable
+            {translate("Model is reachable")}
           </div>
         )}
         {testStatus === "error" && (
           <div className="flex items-start gap-2 text-sm text-red-500">
             <span className="material-symbols-outlined text-base shrink-0">cancel</span>
-            <span>{testError || "Model not reachable"}</span>
+            <span>{testError || translate("Model not reachable")}</span>
           </div>
         )}
 
         <div className="flex gap-2 pt-1">
-          <Button onClick={onClose} variant="ghost" fullWidth size="sm">Cancel</Button>
+          <Button onClick={onClose} variant="ghost" fullWidth size="sm">{translate("Cancel")}</Button>
           <Button
             onClick={handleSave}
             fullWidth
             size="sm"
             disabled={!modelId.trim() || saving}
           >
-            {saving ? "Adding..." : "Add Model"}
+            {translate(saving ? "Adding..." : "Add Model")}
           </Button>
         </div>
       </div>
