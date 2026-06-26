@@ -1,5 +1,5 @@
 ﻿import { NextResponse } from "next/server";
-import { killAppProcesses, spawnUpdaterAndExit } from "@/lib/appUpdater";
+import { spawnUpdaterPrepare } from "@/lib/appUpdater";
 
 export async function POST() {
   if (process.env.NODE_ENV !== "production") {
@@ -9,13 +9,22 @@ export async function POST() {
     );
   }
 
+  // Prepare/swap mode: spawn detached updater WITHOUT killing the app first.
+  // The app keeps serving requests while the updater downloads the tarball.
+  // The updater kills the old app at swap time, installs from the staged
+  // tarball, and relaunches - minimising downtime to local install + relaunch.
   try {
-    // Kill sibling processes (cloudflared, MITM, stray next-server) to release file locks on Windows
-    await killAppProcesses();
-  } catch { /* best effort */ }
+    spawnUpdaterPrepare();
+  } catch (e) {
+    return NextResponse.json(
+      { success: false, message: `Failed to start updater: ${e?.message || e}` },
+      { status: 500 }
+    );
+  }
 
-  // Schedule detached updater then exit current server process
-  spawnUpdaterAndExit();
-
-  return NextResponse.json({ success: true, message: "Updater started. This app will exit shortly." });
+  return NextResponse.json({
+    success: true,
+    message: "Update started in background. App stays available during download.",
+    statusPort: 20129,
+  });
 }

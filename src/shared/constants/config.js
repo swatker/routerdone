@@ -31,6 +31,12 @@ export const UPDATER_CONFIG = {
   waitForExitMaxMs: 20000,
   waitForExitCheckMs: 500,
   appPort: 20128,
+  // Prepare/swap near-zero-downtime update: download tarball while app alive, then quick swap
+  prepareSwap: true,
+  prepareMode: "prepare-swap",
+  packTimeoutMs: 120000,
+  swapWaitMinMs: 2000,
+  swapWaitMaxMs: 15000,
 };
 
 // Theme configuration

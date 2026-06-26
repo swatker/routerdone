@@ -1,8 +1,8 @@
-﻿// Standalone detached updater process.
+// Standalone detached updater process.
 // Spawns `npm i -g <pkg>@latest`, exposes progress via tiny HTTP server.
 // Survives after parent Next server exits (detached + unref by spawner).
 
-const { spawn } = require("child_process");
+const { spawn, execSync } = require("child_process");
 const http = require("http");
 const net = require("net");
 const path = require("path");
@@ -19,6 +19,8 @@ const waitMinMs = parseInt(process.env.UPDATER_WAIT_MIN_MS || "3000", 10);
 const waitMaxMs = parseInt(process.env.UPDATER_WAIT_MAX_MS || "15000", 10);
 const waitCheckMs = parseInt(process.env.UPDATER_WAIT_CHECK_MS || "500", 10);
 const appPort = parseInt(process.env.UPDATER_APP_PORT || "20128", 10);
+const updaterMode = process.env.UPDATER_MODE || "legacy";
+const packTimeoutMs = parseInt(process.env.UPDATER_PACK_TIMEOUT_MS || "120000", 10);
 
 // Data directory (match mitm/paths.js logic)
 function getDataDir() {
@@ -84,7 +86,11 @@ server.on("error", (e) => {
 
 server.listen(port, "127.0.0.1", () => {
   persistStatus();
-  waitForAppExit().then(runInstall);
+  if (updaterMode === "prepare-swap") {
+    runPrepareSwap();
+  } else {
+    waitForAppExit().then(runInstall);
+  }
 });
 
 // Check if app port is still being listened on (= app server still alive)
@@ -131,7 +137,7 @@ function sleep(ms) {
 function runInstall() {
   state.attempt += 1;
   setPhase("installing");
-  pushLog(`[updater] attempt ${state.attempt}/${maxRetries} — npm i -g ${packageName} --prefer-online`);
+  pushLog(`[updater] attempt ${state.attempt}/${maxRetries} - npm i -g ${packageName} --prefer-online`);
 
   const isWin = process.platform === "win32";
   const cmd = isWin ? "npm.cmd" : "npm";
@@ -232,4 +238,207 @@ function finalize(success, exitCode, error) {
     try { server.close(); } catch { /* ignore */ }
     process.exit(success ? 0 : 1);
   }, lingerMs);
+}
+
+// ---------------------------------------------------------------------------
+// Prepare/swap update flow (near-zero downtime)
+// Phase 1 (preparing):  npm pack downloads tarball while app stays alive
+// Phase 2 (swapping):   kill old app (updater excludes itself)
+// Phase 3 (installing): npm i -g <local-tarball> (fast, no network)
+// Phase 4 (done):       relaunch app
+// Fallback: if pack/install fails -> legacy remote install (kill + npm i -g)
+// ---------------------------------------------------------------------------
+
+// Kill MITM server by PID file (mirror appUpdater.js, using local getDataDir)
+function killMitmByPidFileSwap() {
+  try {
+    const mitmPidFile = path.join(getDataDir(), "mitm", ".mitm.pid");
+    if (!fs.existsSync(mitmPidFile)) return;
+    const pid = parseInt(fs.readFileSync(mitmPidFile, "utf8").trim(), 10);
+    if (!pid) return;
+    if (process.platform === "win32") {
+      try { execSync(`taskkill /F /T /PID ${pid}`, { stdio: "ignore", windowsHide: true, timeout: 3000 }); } catch {
+        try { execSync(`powershell -NonInteractive -WindowStyle Hidden -Command "Stop-Process -Id ${pid} -Force"`, { stdio: "ignore", windowsHide: true, timeout: 3000 }); } catch { /* best effort */ }
+      }
+    } else {
+      try { execSync(`sudo -n kill -9 ${pid} 2>/dev/null`, { stdio: "ignore", timeout: 3000 }); } catch {
+        try { process.kill(pid, "SIGKILL"); } catch { /* best effort */ }
+      }
+    }
+    try { fs.unlinkSync(mitmPidFile); } catch { /* best effort */ }
+  } catch { /* best effort */ }
+}
+
+// Collect app PIDs for the swap kill, excluding the detached updater process
+function collectAppPidsForKill() {
+  const pids = [];
+  const platform = process.platform;
+  if (platform === "win32") {
+    try {
+      const psCmd = `powershell -NonInteractive -WindowStyle Hidden -Command "Get-WmiObject Win32_Process -Filter 'Name=\"node.exe\"' | Select-Object ProcessId,CommandLine | ConvertTo-Csv -NoTypeInformation"`;
+      const output = execSync(psCmd, { encoding: "utf8", windowsHide: true, timeout: 5000 });
+      output.split("\n").slice(1).filter(l => l.trim()).forEach(line => {
+        const lower = line.toLowerCase();
+        const isAppProcess = lower.includes("routerdone") ||
+          lower.includes("next-server") ||
+          lower.includes("\\bin\\app\\") ||
+          lower.includes("/bin/app/") ||
+          lower.includes("cli.js");
+        const isUpdaterProc = lower.includes("updater.js");
+        if (isAppProcess && !isUpdaterProc) {
+          const match = line.match(/^"(\d+)"/);
+          if (match && match[1] && match[1] !== process.pid.toString()) pids.push(match[1]);
+        }
+      });
+    } catch { /* no processes */ }
+    for (const procName of ["cloudflared", "tray_windows_release"]) {
+      try {
+        const cmd = `powershell -NonInteractive -WindowStyle Hidden -Command "Get-Process ${procName} -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id"`;
+        const out = execSync(cmd, { encoding: "utf8", windowsHide: true, timeout: 5000 });
+        out.split("\n").forEach(l => {
+          const pid = l.trim();
+          if (pid && !isNaN(pid)) pids.push(pid);
+        });
+      } catch { /* not running */ }
+    }
+  } else {
+    try {
+      const output = execSync("ps aux 2>/dev/null", { encoding: "utf8", timeout: 5000 });
+      output.split("\n").forEach(line => {
+        const isAppProcess = line.includes("routerdone") ||
+          line.includes("next-server") ||
+          line.includes("cloudflared") ||
+          line.includes("/bin/app/") ||
+          line.includes("tray_darwin") ||
+          line.includes("tray_linux");
+        const isUpdaterProc = line.includes("updater.js");
+        if (isAppProcess && !isUpdaterProc) {
+          const parts = line.trim().split(/\s+/);
+          const pid = parts[1];
+          if (pid && !isNaN(pid) && pid !== process.pid.toString()) pids.push(pid);
+        }
+      });
+    } catch { /* no processes */ }
+  }
+  return pids;
+}
+
+
+// Kill all app-related processes to release file locks (excludes updater)
+function killAppProcessesForSwap() {
+  killMitmByPidFileSwap();
+  const pids = collectAppPidsForKill();
+  const platform = process.platform;
+  pids.forEach(pid => {
+    try {
+      if (platform === "win32") {
+        execSync(`taskkill /F /PID ${pid} 2>nul`, { stdio: "ignore", shell: true, windowsHide: true, timeout: 3000 });
+      } else {
+        execSync(`kill -9 ${pid} 2>/dev/null`, { stdio: "ignore", timeout: 3000 });
+      }
+    } catch { /* already dead */ }
+  });
+  return pids.length;
+}
+
+// Phase 1: download tarball via `npm pack` while app stays alive (no kill yet)
+function npmPackToStaging() {
+  return new Promise((resolve, reject) => {
+    const stagingDir = path.join(updateDir, "staging");
+    try { fs.mkdirSync(stagingDir, { recursive: true }); } catch { /* best effort */ }
+    // Clean stale tarballs from previous attempts
+    try { fs.readdirSync(stagingDir).forEach(f => { if (f.endsWith(".tgz")) { try { fs.unlinkSync(path.join(stagingDir, f)); } catch { /* ignore */ } } }); } catch { /* ignore */ }
+    const isWin = process.platform === "win32";
+    const cmd = isWin ? "npm.cmd" : "npm";
+    const args = ["pack", `${packageName}@latest`];
+    pushLog(`[updater] prepare: npm pack ${packageName}@latest -> ${stagingDir}`);
+    const child = spawn(cmd, args, { cwd: stagingDir, stdio: ["ignore", "pipe", "pipe"], windowsHide: true, shell: isWin });
+    let stdout = "";
+    let stderr = "";
+    const timer = setTimeout(() => {
+      try { child.kill("SIGKILL"); } catch { /* ignore */ }
+      reject(new Error(`npm pack timed out after ${Math.round(packTimeoutMs / 1000)}s`));
+    }, packTimeoutMs);
+    child.stdout.on("data", (buf) => { stdout += buf.toString(); });
+    child.stderr.on("data", (buf) => {
+      const s = buf.toString();
+      stderr += s;
+      s.split(/\r?\n/).forEach(pushLog);
+      persistStatus();
+    });
+    child.on("error", (e) => { clearTimeout(timer); reject(e); });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      stdout.split(/\r?\n/).forEach(pushLog);
+      persistStatus();
+      if (code !== 0) {
+        reject(new Error(`npm pack exited ${code}${stderr ? ": " + stderr.slice(0, 200) : ""}`));
+        return;
+      }
+      // npm pack prints the tarball filename (last non-empty stdout line)
+      const tarballName = stdout.split(/\r?\n/).map(l => l.trim()).filter(Boolean).pop();
+      if (!tarballName) { reject(new Error("npm pack produced no tarball name")); return; }
+      const tarballPath = path.join(stagingDir, tarballName);
+      if (!fs.existsSync(tarballPath)) { reject(new Error(`tarball not found: ${tarballPath}`)); return; }
+      pushLog(`[updater] prepare: tarball ready ${tarballName}`);
+      resolve(tarballPath);
+    });
+  });
+}
+
+// Phase 3: install from local tarball (fast, no network)
+function installFromTarball(tarballPath) {
+  return new Promise((resolve, reject) => {
+    const isWin = process.platform === "win32";
+    const cmd = isWin ? "npm.cmd" : "npm";
+    const args = ["i", "-g", tarballPath];
+    pushLog(`[updater] install: npm i -g ${tarballPath}`);
+    const child = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true, shell: isWin });
+    const timer = setTimeout(() => {
+      try { child.kill("SIGKILL"); } catch { /* ignore */ }
+      reject(new Error("npm i -g (tarball) timed out"));
+    }, packTimeoutMs);
+    child.stdout.on("data", (buf) => { buf.toString().split(/\r?\n/).forEach(pushLog); persistStatus(); });
+    child.stderr.on("data", (buf) => { buf.toString().split(/\r?\n/).forEach(pushLog); persistStatus(); });
+    child.on("error", (e) => { clearTimeout(timer); reject(e); });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      pushLog(`[updater] install: npm i -g exited ${code}`);
+      if (code === 0) resolve();
+      else reject(new Error(`npm i -g (tarball) exited ${code}`));
+    });
+  });
+}
+
+// Orchestrate near-zero-downtime update
+async function runPrepareSwap() {
+  pushLog(`[updater] prepare-swap mode starting`);
+  // Phase 1: prepare (download tarball while app keeps serving traffic)
+  setPhase("preparing");
+  let tarballPath;
+  try {
+    tarballPath = await npmPackToStaging();
+  } catch (e) {
+    pushLog(`[updater] prepare failed: ${e.message} -> fallback to legacy remote install`);
+    setPhase("swapping");
+    killAppProcessesForSwap();
+    await waitForAppExit();
+    runInstall();
+    return;
+  }
+  // Phase 2: swap (kill old app now that tarball is staged)
+  setPhase("swapping");
+  const killed = killAppProcessesForSwap();
+  pushLog(`[updater] swap: killed ${killed} app process(es)`);
+  // Give OS time to release file handles (waitForAppExit enforces min delay)
+  await waitForAppExit();
+  // Phase 3: install from local tarball (fast, no network)
+  setPhase("installing");
+  try {
+    await installFromTarball(tarballPath);
+    finalize(true, 0, null);
+  } catch (e) {
+    pushLog(`[updater] tarball install failed: ${e.message} -> fallback to remote install`);
+    runInstall();
+  }
 }

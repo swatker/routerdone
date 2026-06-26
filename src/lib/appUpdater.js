@@ -55,7 +55,9 @@ function collectAppPids() {
           lower.includes("\\bin\\app\\") ||
           lower.includes("/bin/app/") ||
           lower.includes("cli.js");
-        if (isAppProcess) {
+        // Exclude detached updater so prepare/swap updater survives app shutdown
+        const isUpdaterProc = lower.includes("updater.js");
+        if (isAppProcess && !isUpdaterProc) {
           const match = line.match(/^"(\d+)"/);
           if (match && match[1] && match[1] !== process.pid.toString()) pids.push(match[1]);
         }
@@ -83,7 +85,9 @@ function collectAppPids() {
           line.includes("/bin/app/") ||
           line.includes("tray_darwin") ||
           line.includes("tray_linux");
-        if (isAppProcess) {
+        // Exclude detached updater so prepare/swap updater survives app shutdown
+        const isUpdaterProc = line.includes("updater.js");
+        if (isAppProcess && !isUpdaterProc) {
           const parts = line.trim().split(/\s+/);
           const pid = parts[1];
           if (pid && !isNaN(pid) && pid !== process.pid.toString()) pids.push(pid);
@@ -197,4 +201,43 @@ export function spawnUpdaterAndExit(packageName = UPDATER_CONFIG.npmPackageName)
   }).unref();
 
   setTimeout(() => process.exit(0), UPDATER_CONFIG.exitDelayMs);
+}
+
+// Spawn detached updater in prepare/swap mode WITHOUT exiting the app.
+// Old app keeps serving requests while the updater downloads the tarball.
+// The updater kills the old app at swap time, installs from the staged
+// tarball, and relaunches - minimising downtime to local install + relaunch.
+export function spawnUpdaterPrepare(packageName = UPDATER_CONFIG.npmPackageName) {
+  const updaterPath = ensureRuntimeUpdater(resolveBundledUpdaterPath());
+  const isTray = process.env.TRAY_MODE === "1";
+  const relaunch = resolveRelaunchCommand();
+  const relaunchArgs = isTray
+    ? [...relaunch.args, "--tray", "--skip-update"]
+    : [...relaunch.args, "--skip-update"];
+
+  const child = spawn(process.execPath, [updaterPath], {
+    detached: true,
+    stdio: "ignore",
+    windowsHide: true,
+    env: {
+      ...process.env,
+      UPDATER_MODE: UPDATER_CONFIG.prepareMode,
+      UPDATER_PKG_NAME: packageName,
+      UPDATER_PORT: String(UPDATER_CONFIG.statusPort),
+      UPDATER_TAIL_LINES: String(UPDATER_CONFIG.statusLogTailLines),
+      UPDATER_RETRIES: String(UPDATER_CONFIG.installRetries),
+      UPDATER_RETRY_DELAY_MS: String(UPDATER_CONFIG.installRetryDelayMs),
+      UPDATER_LINGER_MS: String(UPDATER_CONFIG.lingerAfterDoneMs),
+      UPDATER_WAIT_MIN_MS: String(UPDATER_CONFIG.swapWaitMinMs),
+      UPDATER_WAIT_MAX_MS: String(UPDATER_CONFIG.swapWaitMaxMs),
+      UPDATER_WAIT_CHECK_MS: String(UPDATER_CONFIG.waitForExitCheckMs),
+      UPDATER_APP_PORT: String(UPDATER_CONFIG.appPort),
+      UPDATER_PACK_TIMEOUT_MS: String(UPDATER_CONFIG.packTimeoutMs),
+      UPDATER_RELAUNCH: "1",
+      UPDATER_RELAUNCH_CMD: relaunch.cmd,
+      UPDATER_RELAUNCH_ARGS: JSON.stringify(relaunchArgs),
+    },
+  });
+  child.unref();
+  return child;
 }

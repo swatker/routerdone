@@ -48,6 +48,8 @@ export default function Sidebar({ onClose }) {
   const [showUpdateModal, setShowUpdateModal] = useState(false);
   const [showAppUpdateModal, setShowAppUpdateModal] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
+  const [autoUpdateActive, setAutoUpdateActive] = useState(false);
+  const [autoUpdateStatus, setAutoUpdateStatus] = useState(null);
   const [shutdownCountdown, setShutdownCountdown] = useState(0);
   const [enableTranslator, setEnableTranslator] = useState(false);
   const { copied, copy } = useCopyToClipboard(2000);
@@ -107,6 +109,48 @@ export default function Sidebar({ onClose }) {
     setShutdownCountdown(0);
   };
 
+  // Near-zero-downtime auto update: spawn detached prepare-swap updater,
+  // poll its status server, then auto-reload when the app comes back.
+  const handleAutoUpdate = async () => {
+    setShowUpdateModal(false);
+    setAutoUpdateActive(true);
+    setAutoUpdateStatus({ phase: "preparing" });
+    try {
+      const updateRes = await fetch("/api/version/update", { method: "POST" });
+      if (!updateRes.ok) {
+        let msg = `Update request failed (${updateRes.status})`;
+        try { const j = await updateRes.json(); if (j?.message) msg = j.message; } catch {}
+        setAutoUpdateStatus({ phase: "error", error: msg });
+        setAutoUpdateActive(false);
+        return;
+      }
+    } catch { /* updater may kill app; network drop is expected */ }
+    const statusUrl = `http://localhost:${UPDATER_CONFIG.statusPort}/update/status`;
+    let seenSwap = false;
+    let appReadyPolling = false;
+    const poll = setInterval(async () => {
+      try {
+        const res = await fetch(statusUrl, { cache: "no-store" });
+        const data = await res.json();
+        setAutoUpdateStatus(data);
+        if (data.phase === "swapping" || data.phase === "installing") seenSwap = true;
+        if (data.phase === "done") appReadyPolling = true;
+        if (data.phase === "error") { clearInterval(poll); return; }
+      } catch {
+        if (seenSwap) appReadyPolling = true;
+      }
+      if (appReadyPolling) {
+        try {
+          const r = await fetch("/api/health", { cache: "no-store" });
+          if (r.ok) {
+            clearInterval(poll);
+            globalThis.location.reload();
+          }
+        } catch { /* app not back yet */ }
+      }
+    }, 1500);
+  };
+
   // Note: legacy updater poll removed. New flow: copy install cmd + shutdown server,
   // user runs the command manually in another terminal.
 
@@ -155,10 +199,18 @@ export default function Sidebar({ onClose }) {
               </span>
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => setShowUpdateModal(true)}
-                  className="px-2 py-1 rounded bg-green-600 hover:bg-green-700 dark:bg-amber-500 dark:hover:bg-amber-600 text-white text-[11px] font-semibold transition-colors cursor-pointer"
+                  onClick={handleAutoUpdate}
+                  className="inline-flex items-center gap-1 px-2 py-1 rounded bg-green-600 hover:bg-green-700 dark:bg-amber-500 dark:hover:bg-amber-600 text-white text-[11px] font-semibold transition-colors cursor-pointer"
                 >
-                  Show command
+                  <span className="material-symbols-outlined text-[12px]">upgrade</span>
+                  Auto Update
+                </button>
+                <button
+                  onClick={() => setShowUpdateModal(true)}
+                  title="Show manual update instructions"
+                  className="px-2 py-1 rounded border border-border-subtle hover:bg-surface-2 text-text-muted text-[11px] font-semibold transition-colors cursor-pointer"
+                >
+                  Manual
                 </button>
                 <button
                   onClick={() => copy(INSTALL_CMD)}
@@ -166,7 +218,7 @@ export default function Sidebar({ onClose }) {
                   className="flex-1 text-left hover:opacity-80 transition-opacity cursor-pointer min-w-0"
                 >
                   <code className="block text-[10px] text-green-600/80 dark:text-amber-400/70 font-mono truncate">
-                    {copied ? "✓ copied!" : INSTALL_CMD}
+                    {copied ? "copied!" : INSTALL_CMD}
                   </code>
                 </button>
               </div>
@@ -372,9 +424,14 @@ export default function Sidebar({ onClose }) {
       />
 
       {/* Disconnected / Updating Overlay */}
-      {(isDisconnected || isUpdating) && (
+      {(isDisconnected || isUpdating || autoUpdateActive) && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-6">
-          {isUpdating ? (
+          {autoUpdateActive ? (
+            <AutoUpdateOverlay
+              status={autoUpdateStatus}
+              latestVersion={updateInfo?.latestVersion}
+            />
+          ) : isUpdating ? (
             <ManualUpdatePanel
               latestVersion={updateInfo?.latestVersion}
               installCmd={INSTALL_CMD}
@@ -404,6 +461,80 @@ export default function Sidebar({ onClose }) {
 
 Sidebar.propTypes = {
   onClose: PropTypes.func,
+};
+
+function AutoUpdateOverlay({ status, latestVersion }) {
+  const phases = [
+    { id: "preparing", label: "Downloading update package", hint: "App stays available", icon: "download" },
+    { id: "swapping", label: "Swapping versions", hint: "Brief pause (~seconds)", icon: "swap_horiz" },
+    { id: "installing", label: "Installing from cache", hint: "Fast - no network", icon: "build" },
+    { id: "done", label: "Update complete", hint: "Restarting...", icon: "check_circle" },
+  ];
+  const currentPhase = status?.phase || "preparing";
+  const isError = currentPhase === "error";
+  const currentIndex = phases.findIndex(p => p.id === currentPhase);
+  return (
+    <div className="w-full max-w-md rounded-xl bg-neutral-900/95 border border-white/10 p-6 text-white">
+      <div className="flex items-center gap-3 mb-5">
+        <div className={`flex items-center justify-center size-11 rounded-full ${isError ? "bg-red-500/20 text-red-400" : "bg-amber-500/20 text-amber-400"}`}>
+          <span className="material-symbols-outlined text-[24px]">{isError ? "error" : "upgrade"}</span>
+        </div>
+        <div>
+          <h2 className="text-lg font-semibold">
+            {isError ? "Update failed" : `Updating to v${latestVersion || "latest"}`}
+          </h2>
+          <p className="text-xs text-white/60">
+            {isError ? (status?.error || "See log below") : "Near-zero downtime - app serves during download"}
+          </p>
+        </div>
+      </div>
+
+      {!isError && (
+        <div className="flex flex-col gap-2 mb-4">
+          {phases.map((p, i) => {
+            const isDone = currentIndex > i || currentPhase === "done";
+            const isActive = currentIndex === i && currentPhase !== "done";
+            return (
+              <div key={p.id} className="flex items-center gap-3">
+                <span
+                  className={`material-symbols-outlined text-[18px] ${
+                    isDone ? "text-green-400" : isActive ? "text-amber-400 animate-pulse" : "text-white/30"
+                  }`}
+                >
+                  {isDone ? "check" : p.icon}
+                </span>
+                <div className="flex flex-col leading-tight">
+                  <span className={`text-sm font-medium ${isDone || isActive ? "text-white" : "text-white/40"}`}>
+                    {p.label}
+                  </span>
+                  <span className="text-[11px] text-white/40">{p.hint}</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {status?.logTail && status.logTail.length > 0 && (
+        <div className="rounded bg-black/40 p-2 max-h-24 overflow-y-auto">
+          {status.logTail.slice(-5).map((line, i) => (
+            <p key={i} className="text-[10px] font-mono text-white/50 leading-relaxed break-all">{line}</p>
+          ))}
+        </div>
+      )}
+
+      {isError && (
+        <Button variant="secondary" fullWidth className="mt-4" onClick={() => globalThis.location.reload()}>
+          Reload
+        </Button>
+      )}
+    </div>
+  );
+}
+
+AutoUpdateOverlay.propTypes = {
+  status: PropTypes.object,
+  latestVersion: PropTypes.string,
 };
 
 function ManualUpdatePanel({ latestVersion, installCmd, copied, onCopyAndShutdown, onCancel, countdown, isDisconnected }) {
