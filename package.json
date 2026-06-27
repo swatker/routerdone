@@ -1,6 +1,6 @@
 {
   "name": "routerdone-app",
-  "version": "0.5.55",
+  "version": "0.5.62",
   "description": "OpenAI-compatible local AI gateway and routing dashboard",
   "private": true,
   "scripts": {
@@ -11,7 +11,8 @@
     "build:bun": "bun --bun next build --webpack",
     "start:bun": "bun ./.next/standalone/server.js",
     "cli:pack": "npm --prefix cli run pack:cli",
-    "cli:publish": "npm --prefix cli run publish:cli"
+    "cli:publish": "npm --prefix cli run publish:cli",
+    "verify:dokploy": "node scripts/verify-dokploy-compose.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

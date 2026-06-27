@@ -1,23 +1,22 @@
-﻿services:
+services:
   routerdone:
     build:
       context: .
       dockerfile: Dockerfile
+      no_cache: true
     restart: unless-stopped
-    stop_grace_period: 30s
     environment:
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}
       INITIAL_PASSWORD: ${INITIAL_PASSWORD:?set INITIAL_PASSWORD}
-      API_KEY_SECRET: ${API_KEY_SECRET:?set API_KEY_SECRET}
-      MACHINE_ID_SALT: ${MACHINE_ID_SALT:?set MACHINE_ID_SALT}
-      PORT: 20128
-      HOSTNAME: 0.0.0.0
+      DATA_DIR: ${DATA_DIR:-/app/data}
+      PORT: ${PORT:-20128}
+      HOSTNAME: ${HOSTNAME:-0.0.0.0}
       NODE_ENV: ${NODE_ENV:-production}
-      TZ: ${TZ:-UTC}
-      DATA_DIR: /app/data
-      NEXT_TELEMETRY_DISABLED: 1
+      NEXT_TELEMETRY_DISABLED: ${NEXT_TELEMETRY_DISABLED:-1}
       BASE_URL: ${BASE_URL:?set BASE_URL}
       NEXT_PUBLIC_BASE_URL: ${NEXT_PUBLIC_BASE_URL:?set NEXT_PUBLIC_BASE_URL}
+      API_KEY_SECRET: ${API_KEY_SECRET:?set API_KEY_SECRET}
+      MACHINE_ID_SALT: ${MACHINE_ID_SALT:?set MACHINE_ID_SALT}
       AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-true}
       REQUIRE_API_KEY: ${REQUIRE_API_KEY:-true}
       ENABLE_REQUEST_LOGS: ${ENABLE_REQUEST_LOGS:-false}
@@ -26,18 +25,16 @@
       - "20128"
     volumes:
       - routerdone-data:/app/data
-      - routerdone-data-home:/app/data-home
     healthcheck:
       test:
         [
           "CMD-SHELL",
           "node -e \"fetch('http://127.0.0.1:20128/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""
         ]
-      interval: 5s
-      timeout: 5s
-      retries: 3
-      start_period: 15s
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
 
 volumes:
   routerdone-data:
-  routerdone-data-home:

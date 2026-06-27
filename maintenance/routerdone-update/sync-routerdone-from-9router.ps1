@@ -1,8 +1,8 @@
-﻿# sync-routerdone-from-9router.ps1
+# sync-routerdone-from-9router.ps1
 # Update RouterDone source from a new upstream 9Router release.
 #
 # Usage:
-#   .\sync-routerdone-from-9router.ps1                          # latest npm version
+#   .\sync-routerdone-from-9router.ps1                          # latest GitHub release
 #   .\sync-routerdone-from-9router.ps1 -UpstreamVersion 0.5.9   # specific version
 #   .\sync-routerdone-from-9router.ps1 -DryRun                  # clone+patch only, no copy
 
@@ -14,28 +14,83 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$RepoRoot = Split-Path -Parent $PSScriptRoot          # routerdone/
+$RepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot) # routerdone/
 $PatchesDir = Join-Path $RepoRoot "patches"
 
+function Invoke-Native {
+  param(
+    [Parameter(Mandatory = $true)][string]$FilePath,
+    [Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments
+  )
+
+  $oldPreference = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  try {
+    & $FilePath @Arguments
+    $exitCode = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $oldPreference
+  }
+
+  if ($exitCode -ne 0) {
+    throw "$FilePath failed with exit code $exitCode"
+  }
+}
+
+function Get-LatestUpstreamVersion {
+  param([string]$RepoUrl)
+
+  Write-Host "Fetching latest 9router version from GitHub Releases..." -ForegroundColor Cyan
+  try {
+    $release = Invoke-RestMethod `
+      -Uri "https://api.github.com/repos/decolua/9router/releases/latest" `
+      -Headers @{ "User-Agent" = "routerdone-upstream-sync"; "Accept" = "application/vnd.github+json" } `
+      -TimeoutSec 10
+    $version = ($release.tag_name -replace "^v", "").Trim()
+    if ($version) { return $version }
+  } catch {
+    Write-Host "  GitHub Releases lookup failed, trying git tags..." -ForegroundColor Yellow
+  }
+
+  try {
+    $tags = git ls-remote --tags $RepoUrl "refs/tags/v*" 2>$null
+    $version = $tags |
+      ForEach-Object {
+        if ($_ -match "refs/tags/v(\d+\.\d+\.\d+)$") { [version]$Matches[1] }
+      } |
+      Sort-Object -Descending |
+      Select-Object -First 1
+    if ($version) { return $version.ToString() }
+  } catch {
+    Write-Host "  Git tag lookup failed, trying npm..." -ForegroundColor Yellow
+  }
+
+  $npmVersion = (npm view 9router version 2>$null).Trim()
+  if ($npmVersion) { return $npmVersion }
+
+  throw "Cannot determine latest 9router version."
+}
+
 if (!$UpstreamVersion) {
-  Write-Host "Fetching latest 9router version from npm..." -ForegroundColor Cyan
-  $UpstreamVersion = (npm view 9router version 2>$null).Trim()
-  if (!$UpstreamVersion) { throw "Cannot determine latest 9router version." }
+  $UpstreamVersion = Get-LatestUpstreamVersion -RepoUrl $UpstreamRepo
 }
 Write-Host "Upstream version: $UpstreamVersion" -ForegroundColor Green
 
 # 1. Clone fresh upstream
 if (Test-Path $TempDir) { Remove-Item -Recurse -Force $TempDir }
 Write-Host "Cloning upstream v$UpstreamVersion..." -ForegroundColor Cyan
-git clone --depth 1 --branch "v$UpstreamVersion" $UpstreamRepo $TempDir 2>&1 | Out-Null
-if ($LASTEXITCODE -ne 0) { throw "git clone failed for v$UpstreamVersion" }
+Invoke-Native git clone --depth 1 --branch "v$UpstreamVersion" $UpstreamRepo $TempDir
 Remove-Item -Recurse -Force (Join-Path $TempDir ".git") -ErrorAction SilentlyContinue
 
 # 2. Apply main patch
 Write-Host "Applying routerdone-custom.patch..." -ForegroundColor Cyan
 Push-Location $TempDir
-git apply (Join-Path $PatchesDir "routerdone-custom.patch") 2>&1
-if ($LASTEXITCODE -ne 0) { Pop-Location; throw "Main patch failed. Rebase against v$UpstreamVersion." }
+try {
+  Invoke-Native git apply (Join-Path $PatchesDir "routerdone-custom.patch")
+} catch {
+  Pop-Location
+  throw "Main patch failed. Rebase against v$UpstreamVersion. $($_.Exception.Message)"
+}
 
 # 3. Apply feature patches in order (zzz-scored BEFORE zzza-progressive)
 $ordered = @(
@@ -60,9 +115,14 @@ foreach ($name in $ordered) {
   $p = Join-Path $PatchesDir "features\$name"
   if (!(Test-Path $p)) { Write-Host "  SKIP (not found): $name" -ForegroundColor Yellow; continue }
   Write-Host "Applying $name..." -NoNewline -ForegroundColor Cyan
-  git apply $p 2>&1 | Out-Null
-  if ($LASTEXITCODE -eq 0) { Write-Host " OK" -ForegroundColor Green }
-  else { Write-Host " FAILED" -ForegroundColor Red; Pop-Location; throw "Patch failed: $name. Rebase against v$UpstreamVersion." }
+  try {
+    Invoke-Native git apply $p | Out-Null
+    Write-Host " OK" -ForegroundColor Green
+  } catch {
+    Write-Host " FAILED" -ForegroundColor Red
+    Pop-Location
+    throw "Patch failed: $name. Rebase against v$UpstreamVersion. $($_.Exception.Message)"
+  }
 }
 Pop-Location
 
