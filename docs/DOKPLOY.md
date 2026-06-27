@@ -4,7 +4,7 @@ Deploy RouterDone as a Docker Compose application.
 
 ## Required Settings
 
-Use `docker-compose.yml` as the compose file.
+Use `docker-compose.dokploy.yml` as the compose file. Keep the service name as `routerdone`; the Dokploy domain mapping is attached to that service.
 
 Set these environment variables:
 
@@ -25,12 +25,21 @@ REQUIRE_API_KEY=true
 
 ## Persistent Volumes
 
-Persist both paths:
+Persist this path:
 
 ```text
 /app/data
-/app/data-home
 ```
+
+## Preflight
+
+Before pushing or redeploying:
+
+```bash
+npm run verify:dokploy
+```
+
+This catches malformed newlines, wrong service names, and compose parse errors before Dokploy runs.
 
 ## Verify
 

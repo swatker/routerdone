@@ -51,7 +51,17 @@ git status --short
 
 Expected: tat ca apply OK, khong conflict.
 
-## 5. Docker Build
+## 5. Dokploy Compose Preflight
+
+```bash
+npm run verify:dokploy
+```
+
+Expected:
+- `docker-compose.dokploy.yml` khong co literal `\n`.
+- `docker compose -p routerdone-routerdone-ed6gok -f docker-compose.dokploy.yml config` parse thanh cong.
+- Service name la `routerdone`, khong phai `app`.
+## 6. Docker Build
 
 ```bash
 docker build -t routerdone .
@@ -59,7 +69,7 @@ docker build -t routerdone .
 
 Expected: build thanh cong, khong loi.
 
-## 6. Docker Compose Up
+## 7. Docker Compose Up
 
 ```bash
 cp .env.example .env
@@ -69,7 +79,7 @@ docker compose up -d
 
 Expected: container chay, khong crash loop.
 
-## 7. Health Smoke Test
+## 8. Health Smoke Test
 
 ```bash
 curl http://localhost:20128/api/health
@@ -77,7 +87,7 @@ curl http://localhost:20128/api/health
 
 Expected: 200 OK, JSON response.
 
-## 8. API Smoke Test
+## 9. API Smoke Test
 
 ```bash
 curl http://localhost:20128/v1/models -H "Authorization: Bearer YOUR_KEY"
@@ -85,15 +95,29 @@ curl http://localhost:20128/v1/models -H "Authorization: Bearer YOUR_KEY"
 
 Expected: 200 OK, model list.
 
-## 9. Dokploy Notes
+## 10. Dokploy Notes
 
-- Compose file: `docker-compose.yml`
+Run preflight before push/release:
+
+```bash
+npm run verify:dokploy
+```
+
+Expected:
+- Compose file is `docker-compose.dokploy.yml`.
+- Top-level service name is `routerdone` because Dokploy domain mapping attaches to service `routerdone`.
+- File uses real newlines, not literal `\n` sequences.
+- `docker compose -p routerdone-routerdone-ed6gok -f docker-compose.dokploy.yml config` passes with required env values.
+
+Dokploy settings:
+- Compose file: `docker-compose.dokploy.yml`
+- Service: `routerdone`
 - Env: copy tu `.env.example`, set BASE_URL = public URL.
 - AUTH_COOKIE_SECURE=true cho HTTPS.
 - REQUIRE_API_KEY=true cho public API.
-- Persistent volumes: `/app/data`, `/app/data-home`.
+- Persistent volume: `/app/data`.
 
-## 10. Internal Automation Excluded
+## 11. Internal Automation Excluded
 
 Xac nhan khong co:
 - `.agents/` (Codekit)
@@ -104,7 +128,7 @@ Xac nhan khong co:
 - `tester/`, `task-bootstrap-cache-design.txt`, `gitbook/`, `images/`, `cli/`
 - `.git/` (no history)
 
-## 11. GitHub Release +1
+## 12. GitHub Release +1
 
 Sau khi verify pass va push len `main`, tao release patch +1:
 
