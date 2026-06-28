@@ -24,7 +24,7 @@ import { injectCaveman } from "../rtk/caveman.js";
 import { injectPonytail } from "../rtk/ponytail.js";
 import { compressMessages, formatRtkLog } from "../rtk/index.js";
 import { guardContext, formatContextGuardLog, estimateInputTokens } from "../rtk/contextGuard.js";
-import { compressWithHeadroom, formatHeadroomLog } from "../rtk/headroom.js";
+import { compressWithHeadroom, formatHeadroomSizeLog, isHeadroomPhantomSavings } from "../rtk/headroom.js";
 import { getCapabilitiesForModel } from "../providers/capabilities.js";
 import { stripUnsupportedModalities } from "../translator/concerns/modality.js";
 import { prefetchRemoteImages } from "../translator/concerns/prefetch.js";
@@ -98,7 +98,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   const acceptHeader = clientRawRequest?.headers?.accept || "";
   const clientPrefersJson = acceptHeader.includes("application/json");
   const clientPrefersSSE = acceptHeader.includes("text/event-stream");
-  if (clientPrefersJson && !clientPrefersSSE && body.stream !== true) {
+  if (clientPrefersJson && !clientPrefersSSE && body.stream !== true && !providerRequiresStreaming) {
     stream = false;
   }
 
@@ -144,6 +144,9 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     toolNameMap = translatedBody._toolNameMap;
     delete translatedBody._toolNameMap;
     translatedBody.model = upstreamModel;
+  }
+  if (translatedBody && typeof translatedBody === "object") {
+    translatedBody.stream = stream;
   }
 
   // Sync the upstream body's stream flag with the internal stream decision.
@@ -193,9 +196,16 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   if (ctxGuardLine) console.log(ctxGuardLine);
 
   // Headroom: optional external proxy compression; fail open if proxy is absent.
-  const headroomStats = await compressWithHeadroom(translatedBody, { enabled: headroomEnabled, url: headroomUrl, model: upstreamModel, format: finalFormat, compressUserMessages: headroomCompressUserMessages });
-  const headroomLine = formatHeadroomLog(headroomStats);
+  const headroomDiagnostics = {};
+  const headroomStats = await compressWithHeadroom(translatedBody, { enabled: headroomEnabled, url: headroomUrl, model: upstreamModel, format: finalFormat, compressUserMessages: headroomCompressUserMessages, diagnostics: headroomDiagnostics });
+  const headroomLine = formatHeadroomSizeLog(headroomStats, headroomDiagnostics);
   if (headroomLine) log?.info?.("HEADROOM", headroomLine);
+  if (!headroomStats && headroomEnabled && headroomDiagnostics.reason) {
+    log?.warn?.("HEADROOM", `skipped: ${headroomDiagnostics.reason}`);
+  }
+  if (isHeadroomPhantomSavings(headroomStats, headroomDiagnostics)) {
+    log?.warn?.("HEADROOM", "reported token delta, but outbound JSON shrank <5%; provider may bill near-original payload");
+  }
 
   // Input size verification: estimate input tokens after all token savers.
   // Logs per-request input size for monitoring and enforces a hard cap that
@@ -380,7 +390,14 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     ? { ...resolvedStreamPolicy, firstProductiveTimeoutMs: Math.min(resolvedStreamPolicy.firstProductiveTimeoutMs ?? 45000, 45000) }
     : resolvedStreamPolicy;
 
-  return handleStreamingResponse({ ...sharedCtx, providerResponse, sourceFormat, targetFormat, userAgent, reqLogger, toolNameMap, streamController, onStreamComplete, log, streamTimeoutPolicy: streamTimeoutOverride });
+  const retryEmptyStream = async () => {
+    const retryResult = await executor.execute({ model, body: translatedBody, stream, credentials, signal: streamController.signal, log, proxyOptions });
+    reqLogger.logTargetRequest(retryResult.url, retryResult.headers, retryResult.transformedBody);
+    if (retryResult.transformedBody) finalBody = retryResult.transformedBody;
+    return retryResult;
+  };
+
+  return handleStreamingResponse({ ...sharedCtx, providerResponse, sourceFormat, targetFormat, userAgent, reqLogger, toolNameMap, streamController, onStreamComplete, log, streamTimeoutPolicy: streamTimeoutOverride, retryFn: retryEmptyStream });
 }
 
 export function isTokenExpiringSoon(expiresAt, bufferMs = 5 * 60 * 1000) {

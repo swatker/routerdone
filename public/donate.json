@@ -1,5 +1,5 @@
 {
-  "title": "Support RouterDone",
+  "title": "Ủng hộ RouterDone",
   "message": "Nếu RouterDone giúp bạn tiết kiệm thời gian, bạn có thể ủng hộ dự án bằng một ly cà phê.",
   "channels": [
     {
@@ -14,7 +14,11 @@
       "accountNo": "33308102666999",
       "accountName": "DANG QUANG THOA",
       "content": "routerdone coffee",
-      "amounts": [30000, 50000, 100000],
+      "amounts": [
+        30000,
+        50000,
+        100000
+      ],
       "defaultAmount": 50000
     },
     {
@@ -23,7 +27,8 @@
       "description": "Ủng hộ qua PayPal",
       "icon": "payments",
       "color": "#0070ba",
-      "url": "https://www.paypal.com/donate/?business=thoadqhn%40gmail.com&currency_code=USD"
+      "url": "https://www.paypal.com/donate/?business=thoadqhn%40gmail.com&currency_code=USD",
+      "account": "thoadqhn@gmail.com"
     }
   ]
 }

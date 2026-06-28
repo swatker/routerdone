@@ -1,4 +1,4 @@
-﻿// Shared quota-fetch logic used by both /api/usage/[connectionId] and
+// Shared quota-fetch logic used by both /api/usage/[connectionId] and
 // /api/usage/batch. Extracted so the batch endpoint can fan out to many
 // connections server-side without duplicating the per-connection flow.
 
@@ -11,10 +11,30 @@ import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
 import { USAGE_APIKEY_PROVIDERS } from "@/shared/constants/providers";
 
 const AUTH_EXPIRED_PATTERNS = ["expired", "authentication", "unauthorized", "401", "re-authorize"];
+const CODEX_USAGE_AUTH_UNAVAILABLE = "codex connected. usage api temporarily unavailable (401).";
+
 function isAuthExpiredMessage(usage) {
   if (!usage?.message) return false;
   const msg = usage.message.toLowerCase();
   return AUTH_EXPIRED_PATTERNS.some((p) => msg.includes(p));
+}
+
+function shouldDisableForUsageAuthFailure(connection, usage) {
+  return connection?.provider === "codex"
+    && typeof usage?.message === "string"
+    && usage.message.toLowerCase() === CODEX_USAGE_AUTH_UNAVAILABLE;
+}
+
+async function disableConnectionForUsageAuthFailure(connection, usage) {
+  if (connection?.isActive === false) return;
+
+  await updateProviderConnection(connection.id, {
+    isActive: false,
+    testStatus: "auth_error",
+    lastError: usage.message,
+    lastErrorAt: new Date().toISOString(),
+    errorCode: "usage_api_401",
+  });
 }
 
 export async function refreshAndUpdateCredentials(connection, force = false, proxyOptions = null) {
@@ -130,6 +150,10 @@ export async function fetchConnectionUsage(connectionId) {
 
     let usage = await getUsageForProvider(connection, proxyOptions);
 
+    if (shouldDisableForUsageAuthFailure(connection, usage)) {
+      await disableConnectionForUsageAuthFailure(connection, usage);
+    }
+
     if (isOAuth && isAuthExpiredMessage(usage) && connection.refreshToken) {
       try {
         const retryResult = await refreshAndUpdateCredentials(connection, true, proxyOptions);
@@ -158,6 +182,21 @@ const QUOTA_FRESH_TTL_MS = 30_000;
 const QUOTA_STALE_TTL_MS = 300_000;
 const QUOTA_FETCH_TIMEOUT_MS = 7_000;
 
+function getEarliestQuotaResetMs(result) {
+  const quotas = result?.data?.quotas;
+  if (!quotas || typeof quotas !== "object") return null;
+
+  const times = Object.values(quotas)
+    .map((quota) => {
+      const time = quota?.resetAt ? new Date(quota.resetAt).getTime() : NaN;
+      return Number.isFinite(time) ? time : null;
+    })
+    .filter((time) => time && time > 0);
+
+  return times.length > 0 ? Math.min(...times) : null;
+}
+
+
 /**
  * Read cached quota for a connection.
  * Returns { value, cacheStatus, cachedAt } or null if expired / no cache.
@@ -167,7 +206,14 @@ const QUOTA_FETCH_TIMEOUT_MS = 7_000;
 export function readQuotaCache(connectionId) {
   const entry = QUOTA_CACHE.get(connectionId);
   if (!entry || !entry.value) return null;
-  const age = Date.now() - entry.fetchedAt;
+  const now = Date.now();
+  const resetMs = getEarliestQuotaResetMs(entry.value);
+  if (resetMs && now >= resetMs) {
+    QUOTA_CACHE.delete(connectionId);
+    return null;
+  }
+
+  const age = now - entry.fetchedAt;
   if (age < QUOTA_FRESH_TTL_MS) {
     return { value: entry.value, cacheStatus: "fresh", cachedAt: entry.fetchedAt };
   }

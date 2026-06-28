@@ -116,12 +116,13 @@ export const FORCE_STREAM_UPSTREAM_MODELS = new Set([
 ]);
 
 export function shouldForceStreamUpstream(provider, model) {
+  if (provider === "openai-compatible") return true;
+  if (typeof provider === "string" && provider.startsWith("openai-compatible-")) return true;
   if (FORCE_STREAM_UPSTREAM_PROVIDERS.has(provider)) return true;
   if (model && FORCE_STREAM_UPSTREAM_MODELS.has(`${provider}/${model}`)) return true;
   // Custom OpenAI-compatible providers (e.g. VietAPI, AIBox) often return an
   // empty SSE body for stream:false. Force upstream streaming for all of them;
   // the gateway folds the SSE back into JSON when the client wants non-stream.
-  if (typeof provider === "string" && provider.startsWith("openai-compatible-")) return true;
   return false;
 }
 // Fixed-tick preflight: poll every 3s, 2-tier caps for fast fallback
