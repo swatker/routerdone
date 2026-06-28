@@ -250,4 +250,45 @@ describe("handleChatCore Headroom diagnostics", () => {
       expect.stringContaining("reported token delta, but outbound JSON shrank <5%; provider may bill near-original payload")
     );
   });
+
+  it("trims reasoning blobs before the model hard cap even when the saved threshold is higher", async () => {
+    const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn() };
+    const messages = [{ role: "user", content: "start" }];
+    for (let i = 0; i < 20; i++) {
+      messages.push({
+        type: "reasoning",
+        id: `rs_${i}`,
+        encrypted_content: "x".repeat(6000),
+        summary: [{ type: "summary_text", text: `reasoning ${i}` }],
+      });
+    }
+    messages.push({ role: "user", content: "continue" });
+
+    const result = await handleChatCore({
+      body: { model: "gpt-3.5-turbo", stream: false, messages },
+      modelInfo: { provider: "openai", model: "gpt-3.5-turbo" },
+      credentials: { apiKey: "test-key", providerSpecificData: {} },
+      log,
+      connectionId: "test-conn",
+      headroomEnabled: false,
+      rtkEnabled: false,
+      cavemanEnabled: false,
+      ponytailEnabled: false,
+      contextGuardMaxBytes: 3_500_000,
+      clientRawRequest: {
+        endpoint: "/v1/chat/completions",
+        body: {},
+        headers: { accept: "application/json" },
+      },
+    });
+
+    expect(result.status).not.toBe(400);
+    expect(executeMock).toHaveBeenCalled();
+    const sent = executeMock.mock.calls.at(-1)[0].body;
+    const reasoning = sent.messages.filter((m) => m.type === "reasoning");
+    expect(reasoning).toHaveLength(20);
+    expect(reasoning.slice(0, 12).every((m) => m.encrypted_content === undefined)).toBe(true);
+    expect(reasoning.slice(12).every((m) => typeof m.encrypted_content === "string")).toBe(true);
+    expect(log.warn).not.toHaveBeenCalledWith("CTX-GUARD", expect.stringContaining("exceeds hard cap"));
+  });
 });

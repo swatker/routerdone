@@ -173,13 +173,19 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   const rtkLine = formatRtkLog(rtkStats);
   if (rtkLine) console.log(rtkLine);
 
-  // Context guard: evict old reasoning encrypted_content blobs when body exceeds
-  // a byte threshold. Prevents long agentic sessions from overflowing upstream
-  // context windows (the >1M-token input problem).
+  // Context guard: evict old reasoning encrypted_content blobs before the
+  // request reaches the model hard cap. User settings can lower the threshold,
+  // but should not raise it above the selected model's safe input window.
   const isCompact = !!body._compact;
+  const modelCtxWindow = getCapabilitiesForModel(provider, upstreamModel).contextWindow || 200000;
+  const hardCapTokens = contextGuardHardCapTokens > 0 ? contextGuardHardCapTokens : Math.floor(modelCtxWindow * 0.85);
+  const modelGuardMaxBytes = Math.max(1, hardCapTokens * 4);
+  const effectiveContextGuardMaxBytes = contextGuardMaxBytes > 0
+    ? Math.min(contextGuardMaxBytes, modelGuardMaxBytes)
+    : modelGuardMaxBytes;
   const ctxGuardStats = guardContext(translatedBody, {
     enabled: contextGuardEnabled !== false,
-    maxBytes: contextGuardMaxBytes,
+    maxBytes: effectiveContextGuardMaxBytes,
     keepRecent: contextGuardKeepRecent,
     isCompact,
   });
@@ -202,8 +208,6 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   // Logs per-request input size for monitoring and enforces a hard cap that
   // signals compact when the conversation exceeds the model context window.
   const estInputTokens = estimateInputTokens(translatedBody);
-  const modelCtxWindow = getCapabilitiesForModel(provider, upstreamModel).contextWindow || 200000;
-  const hardCapTokens = contextGuardHardCapTokens > 0 ? contextGuardHardCapTokens : Math.floor(modelCtxWindow * 0.85);
   console.log(`[CTX-GUARD] input ~${estInputTokens} tokens | cap ${hardCapTokens} (ctx ${modelCtxWindow})${isCompact ? " | compact" : ""}`);
   if (estInputTokens > hardCapTokens && !isCompact) {
     log?.warn?.("CTX-GUARD", `input ${estInputTokens} tokens exceeds hard cap ${hardCapTokens} — signaling compact`);
