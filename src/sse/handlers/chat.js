@@ -17,6 +17,8 @@ import { handleComboChat, handleFusionChat } from "open-sse/services/combo.js";
 import { handleBypassRequest } from "open-sse/utils/bypassHandler.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
 import { resolveRoutePolicy } from "open-sse/services/routePolicy.js";
+import { getCapabilitiesForModel } from "open-sse/providers/capabilities.js";
+import { preprocessVisionContent, hasImageContent } from "../services/visionPreprocessor.js";
 
 const MODEL_REDIRECTS = new Map([
   ["gpt-5.4-mini", "helper.fallback"],
@@ -244,6 +246,23 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
   // Extract userAgent from request
   const userAgent = request?.headers?.get("user-agent") || "";
 
+  // Vision preprocessing: if model lacks vision and request has images,
+  // preprocess through a vision-capable model to convert images to text.
+  if (hasImageContent(body)) {
+    try {
+      var caps = getCapabilitiesForModel(provider, model);
+      if (caps.vision === false) {
+        var visionSettings = await getSettings();
+        var preprocessed = await preprocessVisionContent(body, visionSettings, log);
+        if (preprocessed) {
+          body = preprocessed;
+          log.info("VISION", "Images preprocessed for " + provider + "/" + model);
+        }
+      }
+    } catch (e) {
+      log.warn("VISION", "Preprocessing error: " + e.message + " (non-fatal)");
+    }
+  }
   // Try with available accounts (fallback on errors)
   const excludeConnectionIds = new Set();
   let lastError = null;
