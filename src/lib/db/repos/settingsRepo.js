@@ -44,6 +44,8 @@ const DEFAULT_SETTINGS = {
   modelRedirects: {
     "gpt-5.4-mini": "helper.fallback",
   },
+  visionPreprocessingEnabled: true,
+  visionPreprocessingModel: "oc/mimo-v2.5-free",
 };
 
 async function readRaw() {

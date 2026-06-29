@@ -216,6 +216,12 @@ export async function preprocessVisionContent(body, settings, log) {
     return null;
   }
 
+  // Check if vision preprocessing is enabled
+  if (settings?.visionPreprocessingEnabled === false) {
+    log?.info?.("VISION", "Vision preprocessing disabled by settings");
+    return null;
+  }
+
   // Resolve vision model string
   const visionModel =
     settings?.visionPreprocessingModel || VISION_MODEL_DEFAULT;

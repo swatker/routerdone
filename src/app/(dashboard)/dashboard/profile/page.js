@@ -300,6 +300,38 @@ export default function ProfilePage() {
     }
   };
 
+  
+  const updateVisionPreprocessingEnabled = async (visionPreprocessingEnabled) => {
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ visionPreprocessingEnabled }),
+      });
+      if (res.ok) {
+        setSettings(prev => ({ ...prev, visionPreprocessingEnabled }));
+      }
+    } catch (err) {
+      console.error('Failed to update vision preprocessing:', err);
+    }
+  };
+
+  const updateVisionModel = async (model) => {
+    if (!model || !model.includes('/')) return;
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ visionPreprocessingModel: model }),
+      });
+      if (res.ok) {
+        setSettings(prev => ({ ...prev, visionPreprocessingModel: model }));
+      }
+    } catch (err) {
+      console.error('Failed to update vision model:', err);
+    }
+  };
+
   const updateRequireLogin = async (requireLogin) => {
     try {
       const res = await fetch("/api/settings", {
@@ -1056,7 +1088,57 @@ export default function ProfilePage() {
           </div>
         </Card>
 
-        {/* Network */}
+        {/* Vision Preprocessing */}
+        <Card>
+          <div className="flex items-center gap-3 mb-4">
+            <div className="p-2 rounded-lg bg-teal-500/10 text-teal-500 shrink-0">
+              <span className="material-symbols-outlined text-[20px]">visibility</span>
+            </div>
+            <h3 className="text-base sm:text-lg font-semibold">Vision Preprocessing</h3>
+          </div>
+          <div className="flex flex-col gap-4">
+            <div className="flex items-start sm:items-center justify-between gap-4">
+              <div className="flex-1 min-w-0">
+                <p className="font-medium text-sm sm:text-base">Auto Vision</p>
+                <p className="text-xs sm:text-sm text-text-muted">
+                  Tự độc ảnh bằng vision model trước khi gửi cho non-vision model
+                </p>
+              </div>
+              <Toggle
+                checked={settings.visionPreprocessingEnabled !== false}
+                onChange={() => updateVisionPreprocessingEnabled(settings.visionPreprocessingEnabled === false)}
+                disabled={loading}
+              />
+            </div>
+
+            {settings.visionPreprocessingEnabled !== false && (
+              <div className="flex flex-col gap-2 pt-2 border-t border-border/50">
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-sm sm:text-base">Vision Model</p>
+                  <p className="text-xs sm:text-sm text-text-muted">
+                    Model đọc ảnh. Format: provider/model (VD: oc/mimo-v2.5-free)
+                  </p>
+                </div>
+                <Input
+                  type="text"
+                  value={settings.visionPreprocessingModel || 'oc/mimo-v2.5-free'}
+                  onChange={(e) => updateVisionModel(e.target.value)}
+                  disabled={loading}
+                  className="w-full sm:w-64"
+                  placeholder="oc/mimo-v2.5-free"
+                />
+              </div>
+            )}
+
+            <p className="text-xs text-text-muted italic pt-2 border-t border-border/50">
+              {settings.visionPreprocessingEnabled !== false
+                ? 'Vision preprocessing enabled. Using ' + (settings.visionPreprocessingModel || 'oc/mimo-v2.5-free') + ' to read images before sending to chat models.'
+                : 'Vision preprocessing disabled. Images will be stripped with placeholder text for non-vision models.'}
+            </p>
+          </div>
+        </Card>
+
+                {/* Network */}
         <Card>
           <div className="flex items-center gap-3 mb-4">
             <div className="p-2 rounded-lg bg-purple-500/10 text-purple-500 shrink-0">
