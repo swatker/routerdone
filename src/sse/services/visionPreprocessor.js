@@ -70,7 +70,7 @@ async function fetchImageAsBase64(url) {
     });
     clearTimeout(timeout);
 
-    if (!response.ok) return null;
+    if (!response.ok) { console.log("[VISION] Fetch failed: " + response.status + " for " + url.slice(0, 80)); return null; }
 
     const contentType = response.headers.get("content-type") || "";
     const buffer = await response.arrayBuffer();
@@ -88,7 +88,8 @@ async function fetchImageAsBase64(url) {
 
     const base64 = Buffer.from(buffer).toString("base64");
     return "data:" + mime + ";base64," + base64;
-  } catch {
+  } catch (fetchErr) {
+    console.log("[VISION] Fetch error for " + url.slice(0, 80) + ": " + fetchErr.message);
     return null;
   }
 }
