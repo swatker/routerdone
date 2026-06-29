@@ -37,8 +37,8 @@ const DEFAULT_SETTINGS = {
   ponytailEnabled: false,
   ponytailLevel: "full",
   contextGuardEnabled: true,
-  contextGuardMaxBytes: 3_500_000,
-  contextGuardKeepRecent: 8,
+  contextGuardMaxBytes: 240_000,
+  contextGuardKeepRecent: 3,
   contextGuardHardCapTokens: 0,
   consoleLogRetentionMs: 60 * 60 * 1000,
   modelRedirects: {

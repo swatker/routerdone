@@ -29,6 +29,9 @@ import { getCapabilitiesForModel } from "../providers/capabilities.js";
 import { stripUnsupportedModalities } from "../translator/concerns/modality.js";
 import { prefetchRemoteImages } from "../translator/concerns/prefetch.js";
 
+const DEFAULT_CONTEXT_GUARD_SOFT_TOKENS = Math.max(1, Number(process.env.CONTEXT_GUARD_SOFT_TOKENS) || 60000);
+const DEFAULT_CONTEXT_GUARD_KEEP_RECENT = Math.max(1, Number(process.env.CONTEXT_GUARD_KEEP_RECENT) || 3);
+
 /**
  * Core chat handler - shared between SSE and Worker
  * @param {object} options.body - Request body
@@ -180,13 +183,17 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   const modelCtxWindow = getCapabilitiesForModel(provider, upstreamModel).contextWindow || 200000;
   const hardCapTokens = contextGuardHardCapTokens > 0 ? contextGuardHardCapTokens : Math.floor(modelCtxWindow * 0.85);
   const modelGuardMaxBytes = Math.max(1, hardCapTokens * 4);
+  const softGuardMaxBytes = Math.max(1, Math.min(DEFAULT_CONTEXT_GUARD_SOFT_TOKENS, hardCapTokens) * 4);
   const effectiveContextGuardMaxBytes = contextGuardMaxBytes > 0
-    ? Math.min(contextGuardMaxBytes, modelGuardMaxBytes)
-    : modelGuardMaxBytes;
+    ? Math.min(contextGuardMaxBytes, modelGuardMaxBytes, softGuardMaxBytes)
+    : Math.min(modelGuardMaxBytes, softGuardMaxBytes);
+  const effectiveContextGuardKeepRecent = contextGuardKeepRecent > 0
+    ? Math.min(contextGuardKeepRecent, DEFAULT_CONTEXT_GUARD_KEEP_RECENT)
+    : DEFAULT_CONTEXT_GUARD_KEEP_RECENT;
   const ctxGuardStats = guardContext(translatedBody, {
     enabled: contextGuardEnabled !== false,
     maxBytes: effectiveContextGuardMaxBytes,
-    keepRecent: contextGuardKeepRecent,
+    keepRecent: effectiveContextGuardKeepRecent,
     isCompact,
   });
   const ctxGuardLine = formatContextGuardLog(ctxGuardStats);

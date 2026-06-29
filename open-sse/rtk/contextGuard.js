@@ -21,31 +21,26 @@ function findItems(body) {
   return null;
 }
 
-// Sum sizes of string fields across all items (proxy for token count).
-function estimateBytes(items) {
-  let total = 0;
-  for (const item of items) {
-    if (!item || typeof item !== "object") {
-      if (typeof item === "string") total += item.length;
-      continue;
-    }
-    if (typeof item.encrypted_content === "string") total += item.encrypted_content.length;
-    if (typeof item.content === "string") {
-      total += item.content.length;
-    } else if (Array.isArray(item.content)) {
-      for (const part of item.content) {
-        if (part && typeof part.text === "string") total += part.text.length;
-        if (part && typeof part.output === "string") total += part.output.length;
-      }
-    }
-    if (typeof item.output === "string") total += item.output.length;
-    if (Array.isArray(item.summary)) {
-      for (const s of item.summary) {
-        if (s && typeof s.text === "string") total += s.text.length;
-      }
-    }
+// Sum sizes of all string leaves across supported request items. This keeps
+// CTX-GUARD aligned with provider-side billing for Responses shapes that carry
+// large function_call.arguments, nested content, summaries, or metadata fields.
+function estimateValueBytes(value, seen = new WeakSet()) {
+  if (typeof value === "string") return value.length;
+  if (!value || typeof value !== "object") return 0;
+  if (seen.has(value)) return 0;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    let total = 0;
+    for (const item of value) total += estimateValueBytes(item, seen);
+    return total;
   }
+  let total = 0;
+  for (const v of Object.values(value)) total += estimateValueBytes(v, seen);
   return total;
+}
+
+function estimateBytes(items) {
+  return estimateValueBytes(items);
 }
 
 // Collect reasoning items that carry an encrypted_content blob.

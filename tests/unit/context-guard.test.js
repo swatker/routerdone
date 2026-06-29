@@ -235,9 +235,21 @@ describe("estimateInputTokens", () => {
       ],
     };
     const tokens = estimateInputTokens(body);
-    expect(tokens).toBe(1000);
+    expect(tokens).toBeGreaterThanOrEqual(1000);
+    expect(tokens).toBeLessThan(1020);
   });
 
+
+  it("counts nested Responses fields like function_call arguments", () => {
+    const body = {
+      input: [
+        { type: "function_call", name: "exec", arguments: "x".repeat(8000) },
+        { type: "message", content: [{ type: "input_text", text: "y".repeat(4000) }] },
+      ],
+    };
+    expect(estimateInputTokens(body)).toBeGreaterThanOrEqual(3000);
+    expect(estimateInputTokens(body)).toBeLessThan(3020);
+  });
   it("counts messages-format body", () => {
     const body = {
       messages: [
