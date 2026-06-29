@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { Card, Button, Toggle, Input } from "@/shared/components";
+import { Card, Button, Toggle, Input, Select } from "@/shared/components";
 import Modal, { ConfirmModal } from "@/shared/components/Modal";
 import LanguageSwitcher from "@/shared/components/LanguageSwitcher";
 import { useTheme } from "@/shared/hooks/useTheme";
@@ -28,6 +28,8 @@ export default function ProfilePage() {
   const [shutdownOpen, setShutdownOpen] = useState(false);
   const [isShuttingDown, setIsShuttingDown] = useState(false);
   const [settings, setSettings] = useState({ fallbackStrategy: "fill-first" });
+  const [visionModels, setVisionModels] = useState([]);
+  const [customVisionModel, setCustomVisionModel] = useState('');
   const [loading, setLoading] = useState(true);
   const [passwords, setPasswords] = useState({ current: "", new: "", confirm: "" });
   const [passStatus, setPassStatus] = useState({ type: "", message: "" });
@@ -68,6 +70,24 @@ export default function ProfilePage() {
   }, [langOpen]);
 
   useEffect(() => {
+    fetch("/api/models")
+      .then(res => res.ok ? res.json() : { models: [] })
+      .then(data => {
+        const models = (data.models || [])
+          .filter(m => m.caps?.vision)
+          .map(m => ({
+            value: m.fullModel,
+            label: (m.alias || m.model) + (m.caps?.vision ? ' \uD83D\uDC41' : ''),
+          }));
+        models.push({ value: "__custom__", label: "Custom (nh\u1EADp tay)..." });
+        setVisionModels(models);
+      })
+      .catch(() => {
+        setVisionModels([{ value: "__custom__", label: "Custom (nh\u1EADp tay)..." }]);
+      });
+  }, []);
+
+    useEffect(() => {
     fetch("/api/settings")
       .then((res) => res.json())
       .then((data) => {
@@ -1119,14 +1139,36 @@ export default function ProfilePage() {
                     Model đọc ảnh. Format: provider/model (VD: oc/mimo-v2.5-free)
                   </p>
                 </div>
-                <Input
-                  type="text"
-                  value={settings.visionPreprocessingModel || 'oc/mimo-v2.5-free'}
-                  onChange={(e) => updateVisionModel(e.target.value)}
+                <Select
+                  value={visionModels.some(o => o.value === (settings.visionPreprocessingModel || 'oc/mimo-v2.5-free')) ? settings.visionPreprocessingModel || 'oc/mimo-v2.5-free' : '__custom__'}
+                  onChange={(e) => {
+                    if (e.target.value === '__custom__') {
+                      setCustomVisionModel(settings.visionPreprocessingModel || '');
+                    } else {
+                      setCustomVisionModel('');
+                      updateVisionModel(e.target.value);
+                    }
+                  }}
+                  options={visionModels}
                   disabled={loading}
+                  placeholder="Chọn vision model..."
                   className="w-full sm:w-64"
-                  placeholder="oc/mimo-v2.5-free"
                 />
+                {!visionModels.some(o => o.value === (settings.visionPreprocessingModel || 'oc/mimo-v2.5-free')) && customVisionModel !== null && (
+                  <Input
+                    type="text"
+                    value={customVisionModel || settings.visionPreprocessingModel || ''}
+                    onChange={(e) => setCustomVisionModel(e.target.value)}
+                    onBlur={() => {
+                      if (customVisionModel && customVisionModel.includes('/')) {
+                        updateVisionModel(customVisionModel);
+                      }
+                    }}
+                    disabled={loading}
+                    className="w-full sm:w-64"
+                    placeholder="provider/model"
+                  />
+                )}
               </div>
             )}
 
