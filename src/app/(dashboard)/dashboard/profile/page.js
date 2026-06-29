@@ -28,7 +28,7 @@ export default function ProfilePage() {
   const [shutdownOpen, setShutdownOpen] = useState(false);
   const [isShuttingDown, setIsShuttingDown] = useState(false);
   const [settings, setSettings] = useState({ fallbackStrategy: "fill-first" });
-  const [visionModels, setVisionModels] = useState([]);
+  const [visionModelOptions, setVisionModelOptions] = useState([]);
   const [customVisionModel, setCustomVisionModel] = useState('');
   const [loading, setLoading] = useState(true);
   const [passwords, setPasswords] = useState({ current: "", new: "", confirm: "" });
@@ -80,10 +80,10 @@ export default function ProfilePage() {
             label: (m.alias || m.model) + (m.caps?.vision ? ' \uD83D\uDC41' : ''),
           }));
         models.push({ value: "__custom__", label: "Custom (nh\u1EADp tay)..." });
-        setVisionModels(models);
+        setVisionModelOptions(models);
       })
       .catch(() => {
-        setVisionModels([{ value: "__custom__", label: "Custom (nh\u1EADp tay)..." }]);
+        setVisionModelOptions([{ value: "__custom__", label: "Custom (nh\u1EADp tay)..." }]);
       });
   }, []);
 
@@ -1139,22 +1139,39 @@ export default function ProfilePage() {
                     Model đọc ảnh. Format: provider/model (VD: oc/mimo-v2.5-free)
                   </p>
                 </div>
-                <Select
-                  value={visionModels.some(o => o.value === (settings.visionPreprocessingModel || 'oc/mimo-v2.5-free')) ? settings.visionPreprocessingModel || 'oc/mimo-v2.5-free' : '__custom__'}
-                  onChange={(e) => {
-                    if (e.target.value === '__custom__') {
-                      setCustomVisionModel(settings.visionPreprocessingModel || '');
-                    } else {
-                      setCustomVisionModel('');
-                      updateVisionModel(e.target.value);
-                    }
-                  }}
-                  options={visionModels}
-                  disabled={loading}
-                  placeholder="Chọn vision model..."
-                  className="w-full sm:w-64"
-                />
-                {!visionModels.some(o => o.value === (settings.visionPreprocessingModel || 'oc/mimo-v2.5-free')) && customVisionModel !== null && (
+                <div className="relative w-full sm:w-64">
+                  <select
+                    value={visionModelOptions.some(o => o.value === (settings.visionPreprocessingModel || 'oc/mimo-v2.5-free')) ? settings.visionPreprocessingModel || 'oc/mimo-v2.5-free' : '__custom__'}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (val.startsWith('__group__')) return;
+                      if (val === '__custom__') {
+                        setCustomVisionModel(settings.visionPreprocessingModel || '');
+                      } else {
+                        setCustomVisionModel('');
+                        updateVisionModel(val);
+                      }
+                    }}
+                    disabled={loading}
+                    className="w-full py-2.5 px-3 pr-10 text-sm text-text-main bg-surface-2 border border-transparent rounded-[10px] appearance-none focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500/40 transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed text-[16px] sm:text-sm"
+                  >
+                    <option value="" disabled>Chọn vision model...</option>
+                    {visionModelOptions.map((opt, i) => (
+                      <option
+                        key={i}
+                        value={opt.value}
+                        disabled={opt.disabled}
+                        style={opt.disabled ? { fontWeight: 'bold', color: 'var(--text-muted)', backgroundColor: 'var(--surface-1)' } : { paddingLeft: '1rem' }}
+                      >
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none text-text-muted">
+                    <span className="material-symbols-outlined text-[20px]">expand_more</span>
+                  </div>
+                </div>
+                {!visionModelOptions.some(o => o.value === (settings.visionPreprocessingModel || 'oc/mimo-v2.5-free')) && customVisionModel !== null && (
                   <Input
                     type="text"
                     value={customVisionModel || settings.visionPreprocessingModel || ''}
