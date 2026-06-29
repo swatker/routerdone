@@ -17,7 +17,6 @@ import { handleComboChat, handleFusionChat } from "open-sse/services/combo.js";
 import { handleBypassRequest } from "open-sse/utils/bypassHandler.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
 import { resolveRoutePolicy } from "open-sse/services/routePolicy.js";
-import { preprocessVisionContent, hasImageContent } from "../services/visionPreprocessor.js";
 
 const MODEL_REDIRECTS = new Map([
   ["gpt-5.4-mini", "helper.fallback"],
@@ -114,23 +113,6 @@ export async function handleChat(request, clientRawRequest = null) {
     body = { ...body, model: redirectedModel };
   }
 
-
-  // Vision preprocessing: if body has images, preprocess through a vision model
-  // to convert image blocks to OCR text. This runs BEFORE combo dispatch so that
-  // the same text context is available to all models in the combo, and images are
-  // stripped before any model mutates the shared body object.
-  if (hasImageContent(body)) {
-    try {
-      const visionSettings = await getSettings();
-      const preprocessed = await preprocessVisionContent(body, visionSettings, log);
-      if (preprocessed) {
-        body = preprocessed;
-        log.info("VISION", "Images preprocessed for combo/direct model: " + modelStr);
-      }
-    } catch (e) {
-      log.warn("VISION", "Preprocessing error: " + e.message + " (non-fatal)");
-    }
-  }
   // Check if model is a combo (has multiple models with fallback)
   const comboModels = await getComboModels(modelStr);
   if (comboModels) {

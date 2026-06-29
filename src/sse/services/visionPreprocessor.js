@@ -57,43 +57,33 @@ function buildVisionRequestBody(body) {
   const messages = body.messages || [];
   if (!messages.length) return null;
 
-  // Find last user message with image content
-  let lastUserIdx = -1;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role !== "user") continue;
-    const c = messages[i].content;
-    if (!Array.isArray(c)) continue;
-    if (c.some((b) => b?.type === "image_url" || b?.type === "image")) {
-      lastUserIdx = i;
-      break;
+  // Collect ALL images from ALL user messages
+  const allImageBlocks = [];
+  for (const msg of messages) {
+    if (msg.role !== "user" || !Array.isArray(msg.content)) continue;
+    for (const block of msg.content) {
+      if (block?.type === "image_url") {
+        const url = typeof block.image_url === "string"
+          ? block.image_url
+          : block.image_url?.url;
+        if (url) {
+          allImageBlocks.push({ type: "image_url", image_url: { url } });
+        }
+      } else if (block?.type === "image") {
+        const src = block.source;
+        if (src?.type === "base64" && src?.media_type && src?.data) {
+          allImageBlocks.push({
+            type: "image_url",
+            image_url: { url: "data:" + src.media_type + ";base64," + src.data },
+          });
+        } else if (src?.type === "url" && src?.url) {
+          allImageBlocks.push({ type: "image_url", image_url: { url: src.url } });
+        }
+      }
     }
   }
-  if (lastUserIdx === -1) return null;
 
-  const lastMsg = messages[lastUserIdx];
-  const imageBlocks = lastMsg.content.filter(
-    (b) => b?.type === "image_url" || b?.type === "image"
-  );
-  if (!imageBlocks.length) return null;
-
-  // Normalize image blocks to OpenAI image_url format
-  const normalizedImages = imageBlocks.map((b) => {
-    if (b.type === "image") {
-      // Claude format: { type:"image", source:{ type:"base64", media_type, data } }
-      const src = b.source;
-      if (src?.type === "base64" && src?.media_type && src?.data) {
-        return {
-          type: "image_url",
-          image_url: { url: "data:" + src.media_type + ";base64," + src.data },
-        };
-      }
-      if (src?.type === "url" && src?.url) {
-        return { type: "image_url", image_url: { url: src.url } };
-      }
-    }
-    // OpenAI format: { type:"image_url", image_url:{ url:"..." } }
-    return { type: "image_url", image_url: b.image_url || b };
-  });
+  if (!allImageBlocks.length) return null;
 
   return {
     stream: false,
@@ -103,7 +93,7 @@ function buildVisionRequestBody(body) {
         role: "user",
         content: [
           { type: "text", text: VISION_INSTRUCTION },
-          ...normalizedImages,
+          ...allImageBlocks,
         ],
       },
     ],
@@ -113,9 +103,10 @@ function buildVisionRequestBody(body) {
 /**
  * Replace all image blocks in the request body with vision context text.
  * Keeps original text blocks intact and appends the vision context.
- * @param {object} body - Original request body
+ * Mutates body in-place for combo compatibility.
+ * @param {object} body - Request body
  * @param {string} visionText - Text from vision model
- * @returns {object} Modified body
+ * @returns {object} Modified body (same reference, mutated in-place)
  */
 function injectVisionContext(body, visionText) {
   if (!body?.messages) return body;
@@ -123,13 +114,14 @@ function injectVisionContext(body, visionText) {
   const contextTag =
     "[Vision context from image:\n" + visionText + "\n]";
 
-  const newMessages = body.messages.map((msg) => {
-    if (msg.role !== "user" || !Array.isArray(msg.content)) return msg;
+  for (let mi = 0; mi < body.messages.length; mi++) {
+    const msg = body.messages[mi];
+    if (msg.role !== "user" || !Array.isArray(msg.content)) continue;
 
     const hasImages = msg.content.some(
       (b) => b?.type === "image_url" || b?.type === "image"
     );
-    if (!hasImages) return msg;
+    if (!hasImages) continue;
 
     // Keep original text blocks, drop image blocks
     const filtered = msg.content.filter(
@@ -141,22 +133,25 @@ function injectVisionContext(body, visionText) {
     );
 
     trimmed.push({ type: "text", text: contextTag });
-    return { ...msg, content: trimmed };
-  });
+    body.messages[mi] = { ...msg, content: trimmed };
+  }
 
-  return { ...body, messages: newMessages };
+  return body;
 }
 
 /**
  * Core: preprocess vision content if the body has images.
  *
- * @param {object}   body     - Original request body (not mutated)
+ * @param {object}   body     - Original request body (mutated in-place)
  * @param {object}   settings - App settings (may have visionPreprocessingModel)
  * @param {Function} log      - Logger with .info / .warn / .debug
  * @returns {Promise<object|null>} Modified body with images replaced by text, or null
  */
 export async function preprocessVisionContent(body, settings, log) {
-  if (!hasImageContent(body)) return null;
+  if (!hasImageContent(body)) {
+    log?.debug?.("VISION", "No image content found in body");
+    return null;
+  }
 
   // Resolve vision model string
   const visionModel =
@@ -171,10 +166,17 @@ export async function preprocessVisionContent(body, settings, log) {
   const model = visionModel.slice(slashIdx + 1);
   const provider = resolveProviderAlias(providerAlias);
 
+  log?.info?.("VISION", "Resolved provider: " + provider + " model: " + model);
+
   // Build the vision-only request body
   const visionBody = buildVisionRequestBody(body);
-  if (!visionBody) return null;
+  if (!visionBody) {
+    log?.warn?.("VISION", "buildVisionRequestBody returned null");
+    return null;
+  }
   visionBody.model = model;
+
+  log?.info?.("VISION", "Built vision body with " + visionBody.messages[0].content.length + " content blocks");
 
   // Build upstream URL and headers via the provider's executor
   const executor = getExecutor(provider);
@@ -182,6 +184,7 @@ export async function preprocessVisionContent(body, settings, log) {
   let url;
   try {
     url = executor.buildUrl(model, false);
+    log?.info?.("VISION", "Executor URL: " + url);
   } catch (_e1) {
     // Fallback: construct from provider config
     const cfg = PROVIDERS[provider];
@@ -192,6 +195,7 @@ export async function preprocessVisionContent(body, settings, log) {
     }
     const clean = base.endsWith("/") ? base.slice(0, -1) : base;
     url = clean + "/zen/v1/chat/completions";
+    log?.info?.("VISION", "Fallback URL: " + url);
   }
 
   let headers;
@@ -207,7 +211,7 @@ export async function preprocessVisionContent(body, settings, log) {
     };
   }
 
-  log?.info?.("VISION", "Preprocessing images via " + visionModel);
+  log?.info?.("VISION", "Sending request to " + url);
 
   try {
     const controller = new AbortController();
@@ -222,31 +226,37 @@ export async function preprocessVisionContent(body, settings, log) {
 
     clearTimeout(timeout);
 
+    log?.info?.("VISION", "Response status: " + response.status);
+
     if (!response.ok) {
       const errText = await response.text().catch(() => "");
       log?.warn?.(
         "VISION",
-        "Request failed: " + response.status + " " + errText.slice(0, 200)
+        "Request failed: " + response.status + " " + errText.slice(0, 300)
       );
       return null;
     }
 
     const data = await response.json();
+    log?.info?.("VISION", "Response keys: " + Object.keys(data || {}).join(","));
+
     // Extract text (OpenAI format assumed)
     const visionText = data?.choices?.[0]?.message?.content;
 
     if (!visionText || !visionText.trim()) {
-      log?.warn?.("VISION", "Empty response from vision model");
+      log?.warn?.("VISION", "Empty response from vision model. Data: " + JSON.stringify(data).slice(0, 300));
       return null;
     }
 
     log?.info?.("VISION", "Got " + visionText.length + " chars from vision model");
-    return injectVisionContext(body, visionText);
+    const result = injectVisionContext(body, visionText);
+    log?.info?.("VISION", "Images replaced with text context in body");
+    return result;
   } catch (error) {
     if (error.name === "AbortError") {
       log?.warn?.("VISION", "Request timed out after " + VISION_TIMEOUT_MS + "ms");
     } else {
-      log?.warn?.("VISION", "Error: " + error.message);
+      log?.warn?.("VISION", "Fetch error: " + error.message + " | stack: " + (error.stack || "").slice(0, 200));
     }
     return null;
   }
