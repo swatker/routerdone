@@ -8,8 +8,9 @@
  * downstream model can understand the image without vision support.
  *
  * Key design:
- *  - Runs once per request, at the handleSingleModelChat level
+ *  - Runs once per request, at the handleChat level (before combo dispatch)
  *  - Makes a direct upstream call to the vision model (noAuth provider)
+ *  - Prefetches remote image URLs to base64 (vision model needs inline data)
  *  - Non-fatal: if vision call fails, original body passes through
  *    and the normal modality-stripping in chatCore handles images
  *  - Vision model NEVER answers user questions — only reads images
@@ -48,12 +49,58 @@ export function hasImageContent(body) {
 }
 
 /**
- * Build a vision-only request body extracting images from the last user message.
- * Returns { stream:false, messages:[...] } or null if no images found.
- * @param {object} body - Original request body
- * @returns {object|null}
+ * Fetch a remote image URL and convert to base64 data URI.
+ * @param {string} url - Remote image URL or data URI
+ * @returns {Promise<string|null>} data URI string or null on failure
  */
-function buildVisionRequestBody(body) {
+async function fetchImageAsBase64(url) {
+  // Already a data URI
+  if (url.startsWith("data:")) return url;
+
+  // Only fetch http/https URLs
+  if (!url.startsWith("http://") && !url.startsWith("https://")) return null;
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: { "User-Agent": "RouterDone/1.0" },
+    });
+    clearTimeout(timeout);
+
+    if (!response.ok) return null;
+
+    const contentType = response.headers.get("content-type") || "";
+    const buffer = await response.arrayBuffer();
+
+    // Detect mime type
+    let mime = contentType.split(";")[0].trim();
+    if (!mime || !mime.startsWith("image/")) {
+      // Guess from URL extension
+      if (url.match(/\.jpe?g$/i)) mime = "image/jpeg";
+      else if (url.match(/\.png$/i)) mime = "image/png";
+      else if (url.match(/\.gif$/i)) mime = "image/gif";
+      else if (url.match(/\.webp$/i)) mime = "image/webp";
+      else mime = "image/png"; // default
+    }
+
+    const base64 = Buffer.from(buffer).toString("base64");
+    return "data:" + mime + ";base64," + base64;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Build a vision-only request body extracting images from ALL user messages.
+ * Prefetches remote image URLs to base64 (vision model needs inline data).
+ * @param {object} body - Original request body
+ * @param {Function} log - Logger
+ * @returns {Promise<object|null>}
+ */
+async function buildVisionRequestBody(body, log) {
   const messages = body.messages || [];
   if (!messages.length) return null;
 
@@ -67,7 +114,19 @@ function buildVisionRequestBody(body) {
           ? block.image_url
           : block.image_url?.url;
         if (url) {
-          allImageBlocks.push({ type: "image_url", image_url: { url } });
+          // Prefetch remote URL to base64
+          if (url.startsWith("http://") || url.startsWith("https://")) {
+            log?.info?.("VISION", "Prefetching remote image: " + url.slice(0, 80));
+            const base64Url = await fetchImageAsBase64(url);
+            if (base64Url) {
+              allImageBlocks.push({ type: "image_url", image_url: { url: base64Url } });
+            } else {
+              log?.warn?.("VISION", "Failed to prefetch image: " + url.slice(0, 80));
+            }
+          } else {
+            // Already base64 data URI — use as-is
+            allImageBlocks.push({ type: "image_url", image_url: { url } });
+          }
         }
       } else if (block?.type === "image") {
         const src = block.source;
@@ -77,7 +136,11 @@ function buildVisionRequestBody(body) {
             image_url: { url: "data:" + src.media_type + ";base64," + src.data },
           });
         } else if (src?.type === "url" && src?.url) {
-          allImageBlocks.push({ type: "image_url", image_url: { url: src.url } });
+          // Prefetch Claude URL format
+          const base64Url = await fetchImageAsBase64(src.url);
+          if (base64Url) {
+            allImageBlocks.push({ type: "image_url", image_url: { url: base64Url } });
+          }
         }
       }
     }
@@ -149,7 +212,6 @@ function injectVisionContext(body, visionText) {
  */
 export async function preprocessVisionContent(body, settings, log) {
   if (!hasImageContent(body)) {
-    log?.debug?.("VISION", "No image content found in body");
     return null;
   }
 
@@ -168,10 +230,10 @@ export async function preprocessVisionContent(body, settings, log) {
 
   log?.info?.("VISION", "Resolved provider: " + provider + " model: " + model);
 
-  // Build the vision-only request body
-  const visionBody = buildVisionRequestBody(body);
+  // Build the vision-only request body (with remote URL prefetch to base64)
+  const visionBody = await buildVisionRequestBody(body, log);
   if (!visionBody) {
-    log?.warn?.("VISION", "buildVisionRequestBody returned null");
+    log?.warn?.("VISION", "buildVisionRequestBody returned null (no valid images)");
     return null;
   }
   visionBody.model = model;
@@ -184,7 +246,6 @@ export async function preprocessVisionContent(body, settings, log) {
   let url;
   try {
     url = executor.buildUrl(model, false);
-    log?.info?.("VISION", "Executor URL: " + url);
   } catch (_e1) {
     // Fallback: construct from provider config
     const cfg = PROVIDERS[provider];
@@ -195,7 +256,6 @@ export async function preprocessVisionContent(body, settings, log) {
     }
     const clean = base.endsWith("/") ? base.slice(0, -1) : base;
     url = clean + "/zen/v1/chat/completions";
-    log?.info?.("VISION", "Fallback URL: " + url);
   }
 
   let headers;
@@ -211,7 +271,7 @@ export async function preprocessVisionContent(body, settings, log) {
     };
   }
 
-  log?.info?.("VISION", "Sending request to " + url);
+  log?.info?.("VISION", "Calling " + url + " with model " + model);
 
   try {
     const controller = new AbortController();
@@ -226,25 +286,21 @@ export async function preprocessVisionContent(body, settings, log) {
 
     clearTimeout(timeout);
 
-    log?.info?.("VISION", "Response status: " + response.status);
+    log?.info?.("VISION", "Vision model response: " + response.status);
 
     if (!response.ok) {
       const errText = await response.text().catch(() => "");
-      log?.warn?.(
-        "VISION",
-        "Request failed: " + response.status + " " + errText.slice(0, 300)
-      );
+      console.log("[VISION] Error response: " + errText.slice(0, 500));
       return null;
     }
 
     const data = await response.json();
-    log?.info?.("VISION", "Response keys: " + Object.keys(data || {}).join(","));
 
     // Extract text (OpenAI format assumed)
     const visionText = data?.choices?.[0]?.message?.content;
 
     if (!visionText || !visionText.trim()) {
-      log?.warn?.("VISION", "Empty response from vision model. Data: " + JSON.stringify(data).slice(0, 300));
+      console.log("[VISION] Empty content. Full response: " + JSON.stringify(data).slice(0, 500));
       return null;
     }
 
@@ -256,7 +312,7 @@ export async function preprocessVisionContent(body, settings, log) {
     if (error.name === "AbortError") {
       log?.warn?.("VISION", "Request timed out after " + VISION_TIMEOUT_MS + "ms");
     } else {
-      log?.warn?.("VISION", "Fetch error: " + error.message + " | stack: " + (error.stack || "").slice(0, 200));
+      console.log("[VISION] Fetch error: " + error.message);
     }
     return null;
   }
