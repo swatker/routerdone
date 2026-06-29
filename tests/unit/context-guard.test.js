@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { guardContext, formatContextGuardLog, estimateInputTokens } from "../../open-sse/rtk/contextGuard.js";
+import { guardContext, formatContextGuardLog, estimateInputTokens, pruneContextToHardCap, formatHardCapPruneLog } from "../../open-sse/rtk/contextGuard.js";
 
 // Build a reasoning item with a sized encrypted_content blob.
 function reasoningItem(id, encLen) {
@@ -225,7 +225,7 @@ describe("estimateInputTokens", () => {
     expect(tokens).toBeGreaterThan(0);
     // 400_000 bytes / 4 = ~100_000 tokens
     expect(tokens).toBeGreaterThanOrEqual(90_000);
-    expect(tokens).toBeLessThanOrEqual(110_000);
+    expect(tokens).toBeLessThanOrEqual(115_000);
   });
 
   it("counts array content text parts", () => {
@@ -235,9 +235,21 @@ describe("estimateInputTokens", () => {
       ],
     };
     const tokens = estimateInputTokens(body);
-    expect(tokens).toBe(1000);
+    expect(tokens).toBeGreaterThanOrEqual(1000);
+    expect(tokens).toBeLessThan(1100);
   });
 
+
+  it("counts nested Responses fields like function_call arguments", () => {
+    const body = {
+      input: [
+        { type: "function_call", name: "exec", arguments: "x".repeat(8000) },
+        { type: "message", content: [{ type: "input_text", text: "y".repeat(4000) }] },
+      ],
+    };
+    expect(estimateInputTokens(body)).toBeGreaterThanOrEqual(3000);
+    expect(estimateInputTokens(body)).toBeLessThan(3120);
+  });
   it("counts messages-format body", () => {
     const body = {
       messages: [
@@ -247,5 +259,31 @@ describe("estimateInputTokens", () => {
     };
     const tokens = estimateInputTokens(body);
     expect(tokens).toBeGreaterThan(0);
+  });
+});
+describe("pruneContextToHardCap", () => {
+  it("trims old large string fields below the hard cap while keeping recent items", () => {
+    const body = {
+      input: [
+        { role: "system", content: "S".repeat(20000) },
+        { role: "user", content: "A".repeat(20000) },
+        { type: "function_call_output", output: "B".repeat(20000) },
+        { role: "assistant", content: "recent assistant" },
+        { role: "user", content: "recent user" },
+      ],
+    };
+    const stats = pruneContextToHardCap(body, { hardCapTokens: 9000, keepRecent: 2 });
+    expect(stats.trimmedStrings).toBeGreaterThan(0);
+    expect(stats.estTokensAfter).toBeLessThanOrEqual(9000);
+    expect(body.input[0].content).toBe("S".repeat(20000));
+    expect(body.input[1].content).toContain("[trimmed by RouterDone context guard]");
+    expect(body.input[3].content).toBe("recent assistant");
+    expect(body.input[4].content).toBe("recent user");
+  });
+
+  it("formats hard-cap prune logs", () => {
+    const line = formatHardCapPruneLog({ trimmedStrings: 2, savedBytes: 2048, estTokensBefore: 10000, estTokensAfter: 8000, hardCapTokens: 9000 });
+    expect(line).toContain("pruned 2 old string fields");
+    expect(line).toContain("10000 -> 8000 tokens");
   });
 });

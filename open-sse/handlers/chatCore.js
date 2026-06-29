@@ -23,11 +23,14 @@ import { dedupeTools } from "../utils/toolDeduper.js";
 import { injectCaveman } from "../rtk/caveman.js";
 import { injectPonytail } from "../rtk/ponytail.js";
 import { compressMessages, formatRtkLog } from "../rtk/index.js";
-import { guardContext, formatContextGuardLog, estimateInputTokens } from "../rtk/contextGuard.js";
+import { guardContext, formatContextGuardLog, estimateInputTokens, pruneContextToHardCap, formatHardCapPruneLog } from "../rtk/contextGuard.js";
 import { compressWithHeadroom, formatHeadroomSizeLog, isHeadroomPhantomSavings } from "../rtk/headroom.js";
 import { getCapabilitiesForModel } from "../providers/capabilities.js";
 import { stripUnsupportedModalities } from "../translator/concerns/modality.js";
 import { prefetchRemoteImages } from "../translator/concerns/prefetch.js";
+
+const DEFAULT_CONTEXT_GUARD_SOFT_TOKENS = Math.max(1, Number(process.env.CONTEXT_GUARD_SOFT_TOKENS) || 60000);
+const DEFAULT_CONTEXT_GUARD_KEEP_RECENT = Math.max(1, Number(process.env.CONTEXT_GUARD_KEEP_RECENT) || 3);
 
 /**
  * Core chat handler - shared between SSE and Worker
@@ -182,14 +185,24 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   const rtkLine = formatRtkLog(rtkStats);
   if (rtkLine) console.log(rtkLine);
 
-  // Context guard: evict old reasoning encrypted_content blobs when body exceeds
-  // a byte threshold. Prevents long agentic sessions from overflowing upstream
-  // context windows (the >1M-token input problem).
+  // Context guard: evict old reasoning encrypted_content blobs before the
+  // request reaches the model hard cap. User settings can lower the threshold,
+  // but should not raise it above the selected model's safe input window.
   const isCompact = !!body._compact;
+  const modelCtxWindow = getCapabilitiesForModel(provider, upstreamModel).contextWindow || 200000;
+  const hardCapTokens = contextGuardHardCapTokens > 0 ? contextGuardHardCapTokens : Math.floor(modelCtxWindow * 0.85);
+  const modelGuardMaxBytes = Math.max(1, hardCapTokens * 4);
+  const softGuardMaxBytes = Math.max(1, Math.min(DEFAULT_CONTEXT_GUARD_SOFT_TOKENS, hardCapTokens) * 4);
+  const effectiveContextGuardMaxBytes = contextGuardMaxBytes > 0
+    ? Math.min(contextGuardMaxBytes, modelGuardMaxBytes, softGuardMaxBytes)
+    : Math.min(modelGuardMaxBytes, softGuardMaxBytes);
+  const effectiveContextGuardKeepRecent = contextGuardKeepRecent > 0
+    ? Math.min(contextGuardKeepRecent, DEFAULT_CONTEXT_GUARD_KEEP_RECENT)
+    : DEFAULT_CONTEXT_GUARD_KEEP_RECENT;
   const ctxGuardStats = guardContext(translatedBody, {
     enabled: contextGuardEnabled !== false,
-    maxBytes: contextGuardMaxBytes,
-    keepRecent: contextGuardKeepRecent,
+    maxBytes: effectiveContextGuardMaxBytes,
+    keepRecent: effectiveContextGuardKeepRecent,
     isCompact,
   });
   const ctxGuardLine = formatContextGuardLog(ctxGuardStats);
@@ -210,12 +223,21 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   // Input size verification: estimate input tokens after all token savers.
   // Logs per-request input size for monitoring and enforces a hard cap that
   // signals compact when the conversation exceeds the model context window.
-  const estInputTokens = estimateInputTokens(translatedBody);
-  const modelCtxWindow = getCapabilitiesForModel(provider, upstreamModel).contextWindow || 200000;
-  const hardCapTokens = contextGuardHardCapTokens > 0 ? contextGuardHardCapTokens : Math.floor(modelCtxWindow * 0.85);
+  let estInputTokens = estimateInputTokens(translatedBody);
+  if (estInputTokens > hardCapTokens && !isCompact) {
+    const pruneStats = pruneContextToHardCap(translatedBody, {
+      enabled: contextGuardEnabled !== false,
+      hardCapTokens,
+      keepRecent: effectiveContextGuardKeepRecent,
+      isCompact,
+    });
+    const pruneLine = formatHardCapPruneLog(pruneStats);
+    if (pruneLine) console.log(pruneLine);
+    estInputTokens = estimateInputTokens(translatedBody);
+  }
   console.log(`[CTX-GUARD] input ~${estInputTokens} tokens | cap ${hardCapTokens} (ctx ${modelCtxWindow})${isCompact ? " | compact" : ""}`);
   if (estInputTokens > hardCapTokens && !isCompact) {
-    log?.warn?.("CTX-GUARD", `input ${estInputTokens} tokens exceeds hard cap ${hardCapTokens} — signaling compact`);
+    log?.warn?.("CTX-GUARD", `input ${estInputTokens} tokens exceeds hard cap ${hardCapTokens} after pruning`);
     return createErrorResult(HTTP_STATUS.BAD_REQUEST, `context_too_large: estimated ${estInputTokens} input tokens exceed the ${hardCapTokens} hard cap for ${upstreamModel}. Reduce conversation context (run /compact) before continuing.`);
   }
 
