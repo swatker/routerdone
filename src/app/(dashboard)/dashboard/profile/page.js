@@ -8,6 +8,7 @@ import LanguageSwitcher from "@/shared/components/LanguageSwitcher";
 import { useTheme } from "@/shared/hooks/useTheme";
 import { cn } from "@/shared/utils/cn";
 import { APP_CONFIG } from "@/shared/constants/config";
+import { FREE_PROVIDERS } from "@/shared/constants/providers";
 import { LOCALE_COOKIE, normalizeLocale } from "@/i18n/config";
 import { LOCALE_FLAGS } from "@/shared/constants/locales";
 
@@ -20,6 +21,9 @@ function getLocaleFromCookie() {
   return normalizeLocale(value);
 }
 
+
+// Free providers that need no auth — always available without connection
+const NO_AUTH_PROVIDER_IDS = Object.keys(FREE_PROVIDERS).filter(id => FREE_PROVIDERS[id].noAuth);
 export default function ProfilePage() {
   const router = useRouter();
   const { theme, setTheme, isDark } = useTheme();
@@ -70,23 +74,51 @@ export default function ProfilePage() {
   }, [langOpen]);
 
   useEffect(() => {
-    fetch("/api/models")
-      .then(res => res.ok ? res.json() : { models: [] })
-      .then(data => {
-        const models = (data.models || [])
-          .filter(m => m.caps?.vision)
-          .map(m => ({
-            value: m.fullModel,
-            label: (m.alias || m.model) + (m.caps?.vision ? ' \uD83D\uDC41' : ''),
-          }));
-        models.push({ value: "__custom__", label: "Custom (nh\u1EADp tay)..." });
-        setVisionModelOptions(models);
-      })
-      .catch(() => {
-        setVisionModelOptions([{ value: "__custom__", label: "Custom (nh\u1EADp tay)..." }]);
-      });
-  }, []);
+    const fetchVisionModels = async () => {
+      try {
+        const [modelsRes, providersRes] = await Promise.all([
+          fetch("/api/models"),
+          fetch("/api/providers"),
+        ]);
 
+        const modelsData = modelsRes.ok ? await modelsRes.json() : { models: [] };
+        const providersData = providersRes.ok ? await providersRes.json() : { connections: [] };
+
+        // Connected provider IDs (from /api/providers connections)
+        const connectedProviderIds = new Set(
+          (providersData.connections || []).map(p => p.provider).filter(Boolean)
+        );
+
+        // Only show models from connected providers OR no-auth free providers
+        const visionModels = (modelsData.models || []).filter(m => m.caps?.vision &&
+          (connectedProviderIds.has(m.provider) || NO_AUTH_PROVIDER_IDS.includes(m.provider))
+        );
+
+        const groups = {};
+        for (const m of visionModels) {
+          const alias = m.provider || "other";
+          if (!groups[alias]) {
+            groups[alias] = { displayName: m.providerDisplayName || alias, models: [] };
+          }
+          groups[alias].models.push({ value: m.fullModel, label: (m.alias || m.model) + ' 👁' });
+        }
+        const options = [];
+        for (const alias of Object.keys(groups).sort()) {
+          options.push({ value: '__group__' + alias, label: '── ' + groups[alias].displayName + ' ──', disabled: true });
+          for (const m of groups[alias].models) {
+            options.push(m);
+          }
+        }
+        options.push({ value: '__custom__', label: '✒ Custom (nhập tay)...' });
+        setVisionModelOptions(options);
+      } catch (e) {
+        console.error('Failed to fetch vision models:', e);
+        setVisionModelOptions([{ value: "__custom__", label: "Custom (nhập tay)..." }]);
+      }
+    };
+
+    fetchVisionModels();
+  }, []);
     useEffect(() => {
     fetch("/api/settings")
       .then((res) => res.json())
