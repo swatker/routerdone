@@ -71,9 +71,12 @@ export function isRetryableTransientStatus(status) {
 
 export function adaptiveFirstProductiveTimeoutMs(routeMode, fallbackMs, stats = null) {
   // Clamp even without stats so saved per-combo overrides cannot inflate the
-  // attempt deadline above what the route mode actually tolerates.
+  // attempt deadline above what the route mode actually tolerates. The combo
+  // cap is generous (45s) because vision-only combos may route to a vision model
+  // that needs ~10-15s per image; combos without an explicit preflight override
+  // still use the 9s base default, so only combos that opt in get the headroom.
   const bounds = routeMode === "combo"
-    ? { min: 4000, max: 12000 }
+    ? { min: 4000, max: 45000 }
     : routeMode === "fusion"
       ? { min: 3000, max: 8000 }
       : { min: 5000, max: fallbackMs };
