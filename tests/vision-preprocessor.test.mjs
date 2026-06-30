@@ -6,6 +6,7 @@ import {
   preprocessVisionContent,
   hasImageContent,
   extractVisionText,
+  resolveTargetCaps,
 } from "../src/sse/services/visionPreprocessor.js";
 
 const FAKE_IMG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwADhQGAWjR9awAAAABJRU5ErkJggg==";
@@ -94,4 +95,62 @@ test("preprocessVisionContent skips when _skipVision flag set (anti-loop, regres
 test("hasImageContent detects image_url block", () => {
   assert.equal(hasImageContent({ messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: FAKE_IMG } }] }] }), true);
   assert.equal(hasImageContent({ messages: [{ role: "user", content: "text only" }] }), false);
+});
+
+// ── BUG #3: resolveTargetCaps must see through combo names ────────────────────
+// getModelInfo("vision") returns {provider: null} because "vision" is a combo
+// name, not a provider/model. The old chat.js only checked direct models, so
+// targetCaps was always null for combos — making the preprocessor run even for
+// a combo whose only model is vision-capable (double-read + 502). resolveTargetCaps
+// expands the combo and returns {vision:true} only when EVERY member already has
+// vision, so preprocessing is skipped and the combo reads the raw image once.
+
+const mockDeps = {
+  getModelInfo: async (s) => {
+    if (s === "oc/mimo-v2.5-free") return { provider: "opencode", model: "mimo-v2.5-free" };
+    if (s === "va/glm-5.2") return { provider: "va", model: "glm-5.2" };
+    return { provider: null }; // combo / unknown
+  },
+  getComboModels: async (s) => {
+    if (s === "vision") return ["oc/mimo-v2.5-free"];
+    if (s === "high") return ["va/glm-5.2", "oc/mimo-v2.5-free"];
+    if (s === "textonly") return ["va/glm-5.2"];
+    if (s === "empty") return [];
+    return null;
+  },
+  getCapabilitiesForModel: (provider, _model) => {
+    if (provider === "opencode") return { vision: true };
+    if (provider === "va") return { vision: false };
+    return { vision: false };
+  },
+};
+
+test("resolveTargetCaps: direct vision model returns {vision:true}", async () => {
+  assert.deepEqual(await resolveTargetCaps("oc/mimo-v2.5-free", mockDeps), { vision: true });
+});
+
+test("resolveTargetCaps: direct text model returns caps with vision false", async () => {
+  assert.deepEqual(await resolveTargetCaps("va/glm-5.2", mockDeps), { vision: false });
+});
+
+test("resolveTargetCaps: combo all-vision returns {vision:true} (KEY FIX)", async () => {
+  // "vision" combo = [oc/mimo-v2.5-free] — all vision-capable -> skip preprocessing
+  assert.deepEqual(await resolveTargetCaps("vision", mockDeps), { vision: true });
+});
+
+test("resolveTargetCaps: combo mix vision+text returns null", async () => {
+  // "high" combo has a text-only model -> must NOT skip (fallback needs text)
+  assert.equal(await resolveTargetCaps("high", mockDeps), null);
+});
+
+test("resolveTargetCaps: combo all non-vision returns null", async () => {
+  assert.equal(await resolveTargetCaps("textonly", mockDeps), null);
+});
+
+test("resolveTargetCaps: empty combo returns null", async () => {
+  assert.equal(await resolveTargetCaps("empty", mockDeps), null);
+});
+
+test("resolveTargetCaps: unknown model returns null", async () => {
+  assert.equal(await resolveTargetCaps("nope", mockDeps), null);
 });

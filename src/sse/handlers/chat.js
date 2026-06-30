@@ -17,7 +17,7 @@ import { handleComboChat, handleFusionChat } from "open-sse/services/combo.js";
 import { handleBypassRequest } from "open-sse/utils/bypassHandler.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
 import { resolveRoutePolicy } from "open-sse/services/routePolicy.js";
-import { preprocessVisionContent, hasImageContent } from "../services/visionPreprocessor.js";
+import { preprocessVisionContent, hasImageContent, resolveTargetCaps } from "../services/visionPreprocessor.js";
 import { getCapabilitiesForModel } from "open-sse/providers/capabilities.js";
 
 const MODEL_REDIRECTS = new Map([
@@ -120,17 +120,18 @@ export async function handleChat(request, clientRawRequest = null) {
   // to convert image blocks to OCR text. This runs BEFORE combo dispatch so that
   // the same text context is available to all models in the combo, and images are
   // stripped before any model mutates the shared body object.
-  // For single-model requests we resolve the target model's capabilities and skip
-  // preprocessing when the target already supports vision (no quality downgrade).
-  // Combos resolve null provider here; their own auto-switch reorders by capability.
+  // Skip preprocessing when the target already supports vision — resolveTargetCaps
+  // sees through combo names too, so a combo whose every member is vision-capable
+  // reads the raw image once instead of being double-processed (and downgraded to
+  // a text description that then re-hits the same vision model).
   if (hasImageContent(body)) {
     try {
       const visionSettings = await getSettings();
-      let targetCaps = null;
-      const targetModelInfo = await getModelInfo(modelStr);
-      if (targetModelInfo?.provider) {
-        targetCaps = getCapabilitiesForModel(targetModelInfo.provider, targetModelInfo.model);
-      }
+      const targetCaps = await resolveTargetCaps(modelStr, {
+        getModelInfo,
+        getComboModels,
+        getCapabilitiesForModel,
+      });
       const preprocessed = await preprocessVisionContent(body, visionSettings, log, targetCaps);
       if (preprocessed) {
         body = preprocessed;

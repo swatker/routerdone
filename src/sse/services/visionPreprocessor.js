@@ -9,7 +9,8 @@
  *
  * Key design:
  *  - Runs once per request, at the handleChat level (before combo dispatch)
- *  - Skips when the target model already supports vision (targetCaps.vision)
+ *  - Skips when the target model already supports vision (targetCaps.vision),
+ *    including combos whose every member is vision-capable (resolveTargetCaps)
  *  - Only processes images from the LAST user message (new images)
  *  - Images in older messages are stripped without calling vision model
  *  - Uses self-loopback /api/v1/chat/completions for robust routing
@@ -135,6 +136,45 @@ export function extractVisionText(data) {
   const content = typeof msg.content === "string" ? msg.content : null;
   const reasoning = typeof msg.reasoning_content === "string" ? msg.reasoning_content : null;
   return content || reasoning || null;
+}
+
+// Resolve the *target* model's vision capability for a model string that may be
+// either a direct `provider/model` or a combo name. Returns `{ vision: true }`
+// only when EVERY model the request can route to already supports vision
+// natively — in that case preprocessing would only downgrade quality (replace a
+// raw image with a text description). Returns null otherwise (mixed / non-vision
+// / unknown) so preprocessing runs and gives non-vision fallback members usable
+// text context instead of a raw image they cannot read.
+//
+// `deps` is injected so this stays unit-testable without a DB:
+//   { getModelInfo, getComboModels, getCapabilitiesForModel }
+export async function resolveTargetCaps(modelStr, deps) {
+  const { getModelInfo, getComboModels, getCapabilitiesForModel } = deps;
+
+  // Direct provider/model — resolve caps straight away.
+  const info = await getModelInfo(modelStr);
+  if (info?.provider) {
+    return getCapabilitiesForModel(info.provider, info.model);
+  }
+
+  // Combo — skip preprocessing only if ALL members are vision-capable.
+  // If any member lacks vision, preprocessing must run so that member still
+  // receives a text description instead of being fed a raw image it can't read.
+  const members = await getComboModels(modelStr);
+  if (!members || members.length === 0) return null;
+
+  for (const m of members) {
+    const mInfo = await getModelInfo(m);
+    if (!mInfo?.provider) {
+      // Nested combo / unknown member — be safe, don't skip.
+      return null;
+    }
+    const caps = getCapabilitiesForModel(mInfo.provider, mInfo.model);
+    if (caps?.vision !== true) {
+      return null;
+    }
+  }
+  return { vision: true };
 }
 
 function stripImagesFromMessage(msg, placeholder) {
