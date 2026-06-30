@@ -65,23 +65,28 @@ function resolveComboModelCooldownMs() {
 function getComboCooldownUntil(modelStr) {
   const now = Date.now();
   for (const [key, until] of comboModelCooldowns) {
-    if (!until || until <= now) comboModelCooldowns.delete(key);
+    if (!until || until <= now) {
+      comboModelCooldowns.delete(key);
+      comboModelFailures.delete(key);
+    }
   }
   return comboModelCooldowns.get(modelStr) || 0;
 }
 
 // Per-model consecutive-failure counter drives an exponential backoff so a
-// chronically dead model is not re-probed every base window. Cooldown =
-// base * 2^(n-1), capped at MODEL_FAILURE_BACKOFF_MAX_MS. The counter persists
-// across cooldown expiry and is only cleared by a successful (2xx) call to that
-// model, so repeated failures keep escalating until the model recovers.
+// chronically dead model is not re-probed repeatedly inside one active cooldown
+// window. Once that window naturally expires, the next failure starts fresh at
+// the base window; otherwise recovered high-priority models can stay sunk behind
+// lower-priority fallbacks without ever getting a successful reset.
 function markComboCooldown(modelStr) {
   const baseMs = resolveComboModelCooldownMs();
   if (baseMs <= 0) return 0;
-  const nextCount = (comboModelFailures.get(modelStr) || 0) + 1;
+  const now = Date.now();
+  const prevUntil = comboModelCooldowns.get(modelStr) || 0;
+  const nextCount = prevUntil > now ? (comboModelFailures.get(modelStr) || 0) + 1 : 1;
   comboModelFailures.set(modelStr, nextCount);
   const backoffMs = Math.min(baseMs * Math.pow(2, nextCount - 1), MODEL_FAILURE_BACKOFF_MAX_MS);
-  const until = Date.now() + backoffMs;
+  const until = now + backoffMs;
   comboModelCooldowns.set(modelStr, until);
   return until;
 }

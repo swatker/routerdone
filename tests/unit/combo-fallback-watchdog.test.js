@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 
 import { handleComboChat, getRotatedModels, resetComboRotation, resetComboCooldowns, getComboCooldownState } from "../../open-sse/services/combo.js";
 import { parseResetAfterText, parseRetryAfterHeader } from "../../open-sse/utils/error.js";
@@ -223,6 +223,38 @@ describe("adaptive combo fallback", () => {
     expect(after.failureCount).toBe(1);
     expect(after.remainingMs).toBeGreaterThan(25_000);
     expect(after.remainingMs).toBeLessThanOrEqual(30_000);
+  });
+  it("resets stale combo backoff after the cooldown window expires", async () => {
+    vi.useFakeTimers();
+    try {
+      const preflightFail = async () => new Response(
+        JSON.stringify({ error: { message: "upstream first productive timeout" } }),
+        { status: 502 },
+      );
+      const arm = () => handleComboChat({
+        body: { model: "combo", messages: [] },
+        models: ["p/a"],
+        comboName: "combo",
+        comboRetryAttempts: 0,
+        comboRetryDelayMs: 0,
+        log,
+        handleSingleModel: preflightFail,
+      });
+
+      await arm();
+      vi.advanceTimersByTime(29_000);
+      await arm();
+      expect(getComboCooldownState("p/a").failureCount).toBe(2);
+
+      vi.advanceTimersByTime(61_000);
+      await arm();
+      const after = getComboCooldownState("p/a");
+      expect(after.failureCount).toBe(1);
+      expect(after.remainingMs).toBeGreaterThan(25_000);
+      expect(after.remainingMs).toBeLessThanOrEqual(30_000);
+    } finally {
+      vi.useRealTimers();
+    }
   });
   it("deprioritizes auth-locked combo models and resets after success", async () => {
     const authLocked = () => new Response(
