@@ -200,7 +200,7 @@ export async function preprocessVisionContent(body, settings, log) {
     log?.warn?.("VISION", "No valid images to preprocess");
     return null;
   }
-  visionBody.model = visionModel.split("/").slice(1).join("/");
+  visionBody.model = visionModel;
 
   // Mark request to prevent infinite vision loopback recursion
   visionBody._skipVision = true;
