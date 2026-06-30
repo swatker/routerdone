@@ -120,10 +120,18 @@ export async function handleChat(request, clientRawRequest = null) {
   // to convert image blocks to OCR text. This runs BEFORE combo dispatch so that
   // the same text context is available to all models in the combo, and images are
   // stripped before any model mutates the shared body object.
+  // For single-model requests we resolve the target model's capabilities and skip
+  // preprocessing when the target already supports vision (no quality downgrade).
+  // Combos resolve null provider here; their own auto-switch reorders by capability.
   if (hasImageContent(body)) {
     try {
       const visionSettings = await getSettings();
-      const preprocessed = await preprocessVisionContent(body, visionSettings, log);
+      let targetCaps = null;
+      const targetModelInfo = await getModelInfo(modelStr);
+      if (targetModelInfo?.provider) {
+        targetCaps = getCapabilitiesForModel(targetModelInfo.provider, targetModelInfo.model);
+      }
+      const preprocessed = await preprocessVisionContent(body, visionSettings, log, targetCaps);
       if (preprocessed) {
         body = preprocessed;
         log.info("VISION", "Images preprocessed for combo/direct model: " + modelStr);

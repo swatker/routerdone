@@ -9,12 +9,15 @@
  *
  * Key design:
  *  - Runs once per request, at the handleChat level (before combo dispatch)
+ *  - Skips when the target model already supports vision (targetCaps.vision)
  *  - Only processes images from the LAST user message (new images)
  *  - Images in older messages are stripped without calling vision model
  *  - Uses self-loopback /api/v1/chat/completions for robust routing
  *  - Non-fatal: if vision call fails, original body passes through
  *    and the normal modality-stripping in chatCore handles images
  *  - Vision model NEVER answers user questions -- only reads images
+ *  - Reads `content` first, falls back to `reasoning_content` (reasoning
+ *    vision models can exhaust output budget and leave content empty)
  */
 
 const VISION_MODEL_DEFAULT = "oc/mimo-v2.5-free";
@@ -121,6 +124,19 @@ async function buildVisionRequest(msg, log) {
   };
 }
 
+// Extract the vision model's textual description from its chat completion
+// response. Prefer `content`; fall back to `reasoning_content` because some
+// reasoning-capable vision models (e.g. mimo-v2.5-free) can exhaust their
+// output budget on reasoning and leave `content` empty, in which case the
+// reasoning trace still carries the image description.
+export function extractVisionText(data) {
+  const msg = data?.choices?.[0]?.message;
+  if (!msg) return null;
+  const content = typeof msg.content === "string" ? msg.content : null;
+  const reasoning = typeof msg.reasoning_content === "string" ? msg.reasoning_content : null;
+  return content || reasoning || null;
+}
+
 function stripImagesFromMessage(msg, placeholder) {
   if (!Array.isArray(msg.content)) return msg;
   const filtered = msg.content.filter(b => b?.type !== "image_url" && b?.type !== "image");
@@ -131,8 +147,16 @@ function stripImagesFromMessage(msg, placeholder) {
   return { ...msg, content: trimmed };
 }
 
-export async function preprocessVisionContent(body, settings, log) {
+export async function preprocessVisionContent(body, settings, log, targetCaps) {
   if (!hasImageContent(body)) return null;
+
+  // Skip if the *target* model already supports vision natively — preprocessing
+  // would only downgrade quality (replace a raw image with a text description).
+  // targetCaps is resolved by the caller (chat.js) via getCapabilitiesForModel.
+  if (targetCaps?.vision === true) {
+    log?.info?.("VISION", "Target model has vision capability, skipping preprocessing");
+    return null;
+  }
 
   // Prevent infinite loop: skip if this is already a vision loopback request
   if (body._skipVision) {
@@ -232,7 +256,7 @@ export async function preprocessVisionContent(body, settings, log) {
     }
 
     const data = await response.json();
-    const visionText = data?.choices?.[0]?.message?.content;
+    const visionText = extractVisionText(data);
 
     if (!visionText || !visionText.trim()) {
       console.log("[VISION] Empty content. Response: " + JSON.stringify(data).slice(0, 500));
