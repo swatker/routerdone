@@ -36,12 +36,28 @@ dispatch.
 - **fix:** skip preprocessing when the target model already supports vision
   (`targetCaps.vision === true`), so vision-capable models read the raw image
   instead of a downgraded text description. (`b6d2517`)
+- **fix:** `resolveTargetCaps()` sees through combo names — `getModelInfo(combo)`
+  returns `provider:null`, so `targetCaps` was always null for combos and the
+  preprocessor ran even when a combo's only model was vision-capable, causing a
+  double-read (preprocessor self-loopback + combo dispatch) and a combo-route
+  502. Now expands the combo and skips only when every member is vision-capable;
+  mixed/non-vision combos still preprocess so fallback members get text context.
+  (`61a1325`)
 - **fix:** `extractVisionText()` prefers `message.content` and falls back to
   `message.reasoning_content` — reasoning-capable vision models can exhaust the
   output budget on reasoning and leave `content` empty. (`b6d2517`)
-- **test:** `tests/vision-preprocessor.test.mjs` (9 cases, `node:test`). E2E
-  verified on container v0.5.92 with VietAPI: image → mimo-v2.5-free (112 chars)
-  → `va/glm-5.2` returns `"Ảnh màu đỏ."`.
+- **config:** raise the combo `vision` preflight timeout. The combo route
+  headers deadline is `firstByteTimeoutMs(3000) + firstProductiveTimeoutMs(9000)
+  = 12000ms`; `oc/mimo-v2.5-free` needs ~10–12s per image, so it hit the 12s
+  deadline and aborted to 502 on slower turns. Set
+  `comboStrategies.vision.preflightTimeoutMs = 30000` (deadline → 33s) in the
+  runtime DB settings. This is a runtime config, not a code commit — re-apply
+  after a fresh DB deploy (Dashboard combo settings or direct DB edit).
+- **test:** `tests/vision-preprocessor.test.mjs` (16 cases, `node:test`): 9
+  original + 7 new `resolveTargetCaps` cases (direct/combo all-vision/mix/empty/
+  unknown). E2E verified on container v0.5.92: image → combo `vision` (single
+  read, skip preprocessing) → `oc/mimo-v2.5-free` returns
+  `"Bức ảnh là một mảng màu đỏ rực rỡ và đều đặn."` (200, 4.6s).
 
 ### Combo / Routing
 - **fix:** recover from combo fallback model lock. (`c58eece`)
