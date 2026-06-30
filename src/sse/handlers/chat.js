@@ -18,6 +18,7 @@ import { handleBypassRequest } from "open-sse/utils/bypassHandler.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
 import { resolveRoutePolicy } from "open-sse/services/routePolicy.js";
 import { preprocessVisionContent, hasImageContent } from "../services/visionPreprocessor.js";
+import { getCapabilitiesForModel } from "open-sse/providers/capabilities.js";
 
 const MODEL_REDIRECTS = new Map([
   ["gpt-5.4-mini", "helper.fallback"],

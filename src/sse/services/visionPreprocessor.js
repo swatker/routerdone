@@ -134,6 +134,11 @@ function stripImagesFromMessage(msg, placeholder) {
 export async function preprocessVisionContent(body, settings, log) {
   if (!hasImageContent(body)) return null;
 
+  // Prevent infinite loop: skip if this is already a vision loopback request
+  if (body._skipVision) {
+    return null;
+  }
+
   if (settings?.visionPreprocessingEnabled === false) {
     log?.info?.("VISION", "Vision preprocessing disabled by settings");
     return null;
@@ -142,6 +147,13 @@ export async function preprocessVisionContent(body, settings, log) {
   const visionModel = settings?.visionPreprocessingModel || VISION_MODEL_DEFAULT;
   if (!visionModel.includes("/")) {
     log?.warn?.("VISION", "Invalid vision model string: " + visionModel);
+    return null;
+  }
+
+  // Skip if target model IS the vision model (it can handle images natively)
+  const visionModelId = visionModel.split("/").slice(1).join("/");
+  if (body.model === visionModel || body.model === visionModelId) {
+    log?.info?.("VISION", "Target model is vision model, skipping preprocessing");
     return null;
   }
 
@@ -189,6 +201,9 @@ export async function preprocessVisionContent(body, settings, log) {
     return null;
   }
   visionBody.model = visionModel.split("/").slice(1).join("/");
+
+  // Mark request to prevent infinite vision loopback recursion
+  visionBody._skipVision = true;
 
   // Call vision model via self-loopback
   const port = process.env.PORT || 20128;
