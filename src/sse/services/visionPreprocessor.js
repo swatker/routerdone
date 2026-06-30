@@ -21,8 +21,13 @@
  *    vision models can exhaust output budget and leave content empty)
  */
 
+import { createHash } from "node:crypto";
+
 const VISION_MODEL_DEFAULT = "oc/mimo-v2.5-free";
 const VISION_TIMEOUT_MS = 30000;
+const VISION_INSTRUCTION_VERSION = "v1";
+const VISION_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const VISION_CACHE_MAX_ENTRIES = 500;
 
 const VISION_INSTRUCTION = [
   "Ban la cong cu doc anh. Hay doc anh duoi day va cung cap:",
@@ -31,6 +36,120 @@ const VISION_INSTRUCTION = [
   "",
   "QUAN TRONG: Chi doc anh. KHONG tra loi cau hoi. KHONG phan tich hay binh luan.",
 ].join("\n");
+
+// ── In-memory vision description cache ──────────────────────────────────────────
+const visionDescriptionCache = new Map();
+const visionDescriptionCacheStats = { hits: 0, misses: 0, sets: 0, evictions: 0 };
+
+function nowMs() { return Date.now(); }
+
+function pruneExpiredVisionCache(now = nowMs()) {
+  for (const [key, entry] of visionDescriptionCache) {
+    if (!entry || entry.expiresAt <= now) {
+      visionDescriptionCache.delete(key);
+      visionDescriptionCacheStats.evictions += 1;
+    }
+  }
+}
+
+function enforceVisionCacheLimit() {
+  while (visionDescriptionCache.size > VISION_CACHE_MAX_ENTRIES) {
+    const oldestKey = visionDescriptionCache.keys().next().value;
+    if (!oldestKey) return;
+    visionDescriptionCache.delete(oldestKey);
+    visionDescriptionCacheStats.evictions += 1;
+  }
+}
+
+export function clearVisionDescriptionCache() {
+  visionDescriptionCache.clear();
+  visionDescriptionCacheStats.hits = 0;
+  visionDescriptionCacheStats.misses = 0;
+  visionDescriptionCacheStats.sets = 0;
+  visionDescriptionCacheStats.evictions = 0;
+}
+
+export function getVisionDescriptionCacheStats() {
+  pruneExpiredVisionCache();
+  return {
+    size: visionDescriptionCache.size,
+    hits: visionDescriptionCacheStats.hits,
+    misses: visionDescriptionCacheStats.misses,
+    sets: visionDescriptionCacheStats.sets,
+    evictions: visionDescriptionCacheStats.evictions,
+    ttlMs: VISION_CACHE_TTL_MS,
+    maxEntries: VISION_CACHE_MAX_ENTRIES,
+  };
+}
+
+// ── Image hashing and cache key helpers ─────────────────────────────────────────
+
+function sha256Hex(value) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function imageUrlFromBlock(block) {
+  if (block?.type !== "image_url") return null;
+  return typeof block.image_url === "string" ? block.image_url : block.image_url?.url || null;
+}
+
+function hashImageUrl(url) {
+  if (!url || typeof url !== "string") return null;
+  const dataMatch = url.match(/^data:([^;,]+)?(;base64)?,(.*)$/s);
+  if (dataMatch) {
+    const mime = (dataMatch[1] || "application/octet-stream").toLowerCase();
+    const isBase64 = !!dataMatch[2];
+    const payload = dataMatch[3] || "";
+    const bytes = isBase64 ? Buffer.from(payload, "base64") : Buffer.from(decodeURIComponent(payload), "utf8");
+    return mime + ":" + sha256Hex(bytes);
+  }
+  return "url:" + sha256Hex(url);
+}
+
+function buildVisionCacheKey(visionModel, imageBlocks) {
+  const imageHashes = [];
+  for (const block of imageBlocks || []) {
+    const url = imageUrlFromBlock(block);
+    const hash = hashImageUrl(url);
+    if (!hash) return null;
+    imageHashes.push(hash);
+  }
+  if (imageHashes.length === 0) return null;
+  return [
+    "vision-description",
+    VISION_INSTRUCTION_VERSION,
+    visionModel || VISION_MODEL_DEFAULT,
+    ...imageHashes,
+  ].join("|");
+}
+
+function getCachedVisionDescription(cacheKey) {
+  if (!cacheKey) return null;
+  pruneExpiredVisionCache();
+  const entry = visionDescriptionCache.get(cacheKey);
+  if (!entry) {
+    visionDescriptionCacheStats.misses += 1;
+    return null;
+  }
+  // LRU: re-insert at end
+  visionDescriptionCache.delete(cacheKey);
+  visionDescriptionCache.set(cacheKey, entry);
+  visionDescriptionCacheStats.hits += 1;
+  return entry.text;
+}
+
+function setCachedVisionDescription(cacheKey, text) {
+  if (!cacheKey || !text || !text.trim()) return;
+  visionDescriptionCache.set(cacheKey, {
+    text,
+    createdAt: nowMs(),
+    expiresAt: nowMs() + VISION_CACHE_TTL_MS,
+  });
+  visionDescriptionCacheStats.sets += 1;
+  enforceVisionCacheLimit();
+}
+
+// ── Core functions ──────────────────────────────────────────────────────────────
 
 export function hasImageContent(body) {
   if (!body?.messages) return false;
@@ -109,9 +228,8 @@ async function extractImagesFromMessage(msg, log) {
   return imageBlocks;
 }
 
-async function buildVisionRequest(msg, log) {
-  const imageBlocks = await extractImagesFromMessage(msg, log);
-  if (!imageBlocks.length) return null;
+function buildVisionRequestFromImages(imageBlocks) {
+  if (!imageBlocks?.length) return null;
   return {
     stream: false,
     model: "",
@@ -259,7 +377,22 @@ export async function preprocessVisionContent(body, settings, log, targetCaps) {
 
   log?.info?.("VISION", "Processing " + lastMsgImages.length + " image(s) in last user message");
 
-  const visionBody = await buildVisionRequest(lastMsg, log);
+  // Extract image blocks and build cache key
+  const imageBlocks = await extractImagesFromMessage(lastMsg, log);
+  if (!imageBlocks.length) {
+    log?.warn?.("VISION", "No valid images to preprocess");
+    return null;
+  }
+
+  const cacheKey = buildVisionCacheKey(visionModel, imageBlocks);
+  const cachedVisionText = getCachedVisionDescription(cacheKey);
+  if (cachedVisionText) {
+    messages[lastUserIdx] = stripImagesFromMessage(lastMsg, "[Image description: " + cachedVisionText + "]");
+    log?.info?.("VISION", "Using cached image description (" + cachedVisionText.length + " chars)");
+    return body;
+  }
+
+  const visionBody = buildVisionRequestFromImages(imageBlocks);
   if (!visionBody) {
     log?.warn?.("VISION", "No valid images to preprocess");
     return null;
@@ -304,6 +437,7 @@ export async function preprocessVisionContent(body, settings, log, targetCaps) {
       return body;
     }
 
+    setCachedVisionDescription(cacheKey, visionText);
     log?.info?.("VISION", "Got " + visionText.length + " chars from vision model");
     messages[lastUserIdx] = stripImagesFromMessage(lastMsg, "[Image description: " + visionText + "]");
     log?.info?.("VISION", "Images replaced with description in last message");

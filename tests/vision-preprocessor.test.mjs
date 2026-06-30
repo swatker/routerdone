@@ -7,6 +7,8 @@ import {
   hasImageContent,
   extractVisionText,
   resolveTargetCaps,
+  clearVisionDescriptionCache,
+  getVisionDescriptionCacheStats,
 } from "../src/sse/services/visionPreprocessor.js";
 
 const FAKE_IMG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwADhQGAWjR9awAAAABJRU5ErkJggg==";
@@ -153,4 +155,171 @@ test("resolveTargetCaps: empty combo returns null", async () => {
 
 test("resolveTargetCaps: unknown model returns null", async () => {
   assert.equal(await resolveTargetCaps("nope", mockDeps), null);
+});
+
+
+// ── Vision description cache ─────────────────────────────────────────────────
+// When the same image is sent in multiple ZCode multi-turn requests, the
+// preprocessor should call the vision model ONCE, cache the description, then
+// reuse it for subsequent requests with the same image content hash.
+
+const FAKE_IMG_B = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+
+test("cache: same image reuses cached description (no second vision call)", async () => {
+  clearVisionDescriptionCache();
+  const calls = [];
+  const fakeFetch = (url, opts) => {
+    calls.push(JSON.parse(opts.body));
+    return Promise.resolve({
+      ok: true,
+      json: () => Promise.resolve({
+        choices: [{ message: { content: "cached description of image" } }],
+      }),
+    });
+  };
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = fakeFetch;
+
+  try {
+    const settings = { visionPreprocessingEnabled: true, visionPreprocessingModel: "oc/mimo-v2.5-free" };
+
+    // First call — should hit vision model
+    const body1 = {
+      model: "combo/zcode",
+      stream: false,
+      messages: [{ role: "user", content: [
+        { type: "text", text: "what is this?" },
+        { type: "image_url", image_url: { url: FAKE_IMG } },
+      ] }],
+    };
+    const first = await preprocessVisionContent(body1, settings, noLog, { vision: false });
+    assert.ok(first, "first call should preprocess image");
+    assert.equal(calls.length, 1, "first call should call vision model once");
+    assert.match(JSON.stringify(first.messages[0].content), /cached description/);
+
+    // Second call with same image — should use cache
+    const body2 = {
+      model: "combo/zcode",
+      stream: false,
+      messages: [{ role: "user", content: [
+        { type: "text", text: "what is this again?" },
+        { type: "image_url", image_url: { url: FAKE_IMG } },
+      ] }],
+    };
+    const second = await preprocessVisionContent(body2, settings, noLog, { vision: false });
+    assert.ok(second, "second call should still replace image with text");
+    assert.equal(calls.length, 1, "second call should reuse cached vision description, NOT call vision model again");
+    assert.match(JSON.stringify(second.messages[0].content), /cached description/);
+
+    const stats = getVisionDescriptionCacheStats();
+    assert.equal(stats.size, 1, "cache should have 1 entry");
+    assert.equal(stats.hits, 1, "cache should have 1 hit (second call)");
+    assert.equal(stats.misses, 1, "cache should have 1 miss (first call)");
+  } finally {
+    globalThis.fetch = originalFetch;
+    clearVisionDescriptionCache();
+  }
+});
+
+test("cache: different image misses cache and calls vision model again", async () => {
+  clearVisionDescriptionCache();
+  const calls = [];
+  const fakeFetch = (url, opts) => {
+    calls.push(JSON.parse(opts.body));
+    return Promise.resolve({
+      ok: true,
+      json: () => Promise.resolve({
+        choices: [{ message: { content: "different image description" } }],
+      }),
+    });
+  };
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = fakeFetch;
+
+  try {
+    const settings = { visionPreprocessingEnabled: true, visionPreprocessingModel: "oc/mimo-v2.5-free" };
+
+    // First image
+    const body1 = {
+      model: "combo/zcode",
+      stream: false,
+      messages: [{ role: "user", content: [
+        { type: "text", text: "describe this" },
+        { type: "image_url", image_url: { url: FAKE_IMG } },
+      ] }],
+    };
+    await preprocessVisionContent(body1, settings, noLog, { vision: false });
+
+    // Second DIFFERENT image
+    const body2 = {
+      model: "combo/zcode",
+      stream: false,
+      messages: [{ role: "user", content: [
+        { type: "text", text: "describe this other image" },
+        { type: "image_url", image_url: { url: FAKE_IMG_B } },
+      ] }],
+    };
+    await preprocessVisionContent(body2, settings, noLog, { vision: false });
+
+    assert.equal(calls.length, 2, "different image hashes should call vision model twice");
+
+    const stats = getVisionDescriptionCacheStats();
+    assert.equal(stats.size, 2, "cache should have 2 entries");
+    assert.equal(stats.hits, 0, "cache should have 0 hits");
+    assert.equal(stats.misses, 2, "cache should have 2 misses");
+  } finally {
+    globalThis.fetch = originalFetch;
+    clearVisionDescriptionCache();
+  }
+});
+
+test("cache: same image but different vision model misses cache", async () => {
+  clearVisionDescriptionCache();
+  const calls = [];
+  const fakeFetch = (url, opts) => {
+    calls.push(JSON.parse(opts.body));
+    return Promise.resolve({
+      ok: true,
+      json: () => Promise.resolve({
+        choices: [{ message: { content: "description from model" } }],
+      }),
+    });
+  };
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = fakeFetch;
+
+  try {
+    // First call with mimo
+    const settings1 = { visionPreprocessingEnabled: true, visionPreprocessingModel: "oc/mimo-v2.5-free" };
+    const body1 = {
+      model: "combo/zcode",
+      stream: false,
+      messages: [{ role: "user", content: [
+        { type: "text", text: "describe this" },
+        { type: "image_url", image_url: { url: FAKE_IMG } },
+      ] }],
+    };
+    await preprocessVisionContent(body1, settings1, noLog, { vision: false });
+
+    // Second call with a DIFFERENT vision model (same image)
+    const settings2 = { visionPreprocessingEnabled: true, visionPreprocessingModel: "oc/gpt-4o-mini" };
+    const body2 = {
+      model: "combo/zcode",
+      stream: false,
+      messages: [{ role: "user", content: [
+        { type: "text", text: "describe this again" },
+        { type: "image_url", image_url: { url: FAKE_IMG } },
+      ] }],
+    };
+    await preprocessVisionContent(body2, settings2, noLog, { vision: false });
+
+    assert.equal(calls.length, 2, "same image with a different vision model should miss cache");
+    assert.equal(getVisionDescriptionCacheStats().size, 2, "cache should have 2 entries (different model keys)");
+  } finally {
+    globalThis.fetch = originalFetch;
+    clearVisionDescriptionCache();
+  }
 });
