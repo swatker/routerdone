@@ -14,6 +14,7 @@ import {
   isClientPayloadError,
   isProviderSelfHealError,
   shouldDisableConnectionForError,
+  shouldLockConnectionForError,
   isModelLockActive,
   getEarliestModelLockUntil,
 } from "../../open-sse/services/accountFallback.js";
@@ -262,5 +263,116 @@ describe("auto-disable billing errors", () => {
 
   it("does not disable unrelated 403 errors", () => {
     expect(shouldDisableConnectionForError(403, "request not allowed")).toBe(false);
+  });
+});
+
+
+describe("cross-model lock escalation prevention", () => {
+  function makeConn(model, count, kind, atMs) {
+    const conn = {};
+    if (model) {
+      conn["comboPreflightFailureKind_" + model] = kind;
+      conn["comboPreflightFailureCount_" + model] = count;
+      conn["comboPreflightFailureAt_" + model] = new Date(atMs).toISOString();
+    } else {
+      conn.comboPreflightFailureKind = kind;
+      conn.comboPreflightFailureCount = count;
+      conn.comboPreflightFailureAt = new Date(atMs).toISOString();
+    }
+    return conn;
+  }
+
+  function getComboPreflightInfo(conn, model) {
+    if (model) {
+      return {
+        kind: conn?.["comboPreflightFailureKind_" + model] ?? null,
+        count: conn?.["comboPreflightFailureCount_" + model] ?? 0,
+        at: conn?.["comboPreflightFailureAt_" + model] ?? null,
+      };
+    }
+    return {
+      kind: conn?.comboPreflightFailureKind ?? null,
+      count: conn?.comboPreflightFailureCount ?? 0,
+      at: conn?.comboPreflightFailureAt ?? null,
+    };
+  }
+
+  function buildPreflightUpdate(model, kind, count, now) {
+    const upd = {};
+    if (model) {
+      upd["comboPreflightFailureKind_" + model] = kind;
+      upd["comboPreflightFailureCount_" + model] = count;
+      upd["comboPreflightFailureAt_" + model] = new Date(now).toISOString();
+    } else {
+      upd.comboPreflightFailureKind = kind;
+      upd.comboPreflightFailureCount = count;
+      upd.comboPreflightFailureAt = new Date(now).toISOString();
+    }
+    return upd;
+  }
+
+  it("same model fails twice -> recentFailureCount=2 -> escalates", () => {
+    const now = Date.now();
+    const conn = makeConn("glm-5.1", 1, "preflight", now - 10000);
+
+    const info = getComboPreflightInfo(conn, "glm-5.1");
+    expect(info.count).toBe(1);
+    expect(info.kind).toBe("preflight");
+
+    const recentSameKind = info.at && (now - new Date(info.at).getTime() <= 60000);
+    const recentFailureCount = recentSameKind ? info.count + 1 : 1;
+    expect(recentFailureCount).toBe(2);
+
+    expect(shouldLockConnectionForError({
+      status: 502, errorText: "upstream headers timeout", recentFailureCount
+    })).toBe(true);
+  });
+
+  it("different models each fail once -> not escalate", () => {
+    const now = Date.now();
+    const conn = makeConn("glm-5.1", 1, "preflight", now - 10000);
+    Object.assign(conn, buildPreflightUpdate("glm-5.1", "preflight", 1, now - 10000));
+
+    // glm-5.2 has no prior failures — should start at 1, not 2
+    const info2 = getComboPreflightInfo(conn, "glm-5.2");
+    expect(info2.count).toBe(0);
+    expect(info2.kind).toBe(null);
+
+    const recentSameKind2 = info2.at && (now - new Date(info2.at).getTime() <= 60000);
+    const count2 = recentSameKind2 ? info2.count + 1 : 1;
+    expect(count2).toBe(1);
+
+    expect(shouldLockConnectionForError({
+      status: 502, errorText: "upstream headers timeout", recentFailureCount: count2
+    })).toBe(false);
+
+    // glm-5.1 counter preserved
+    expect(getComboPreflightInfo(conn, "glm-5.1").count).toBe(1);
+  });
+
+  it("null model falls back to connection-level fields", () => {
+    const now = Date.now();
+    const conn = makeConn(null, 2, "preflight", now - 10000);
+    const info = getComboPreflightInfo(conn, null);
+    expect(info.count).toBe(2);
+    expect(shouldLockConnectionForError({
+      status: 502, errorText: "upstream headers timeout", recentFailureCount: 2
+    })).toBe(true);
+  });
+
+  it("clear per-model counter does not affect other models", () => {
+    const conn = {
+      "comboPreflightFailureCount_glm-5.1": 2,
+      "comboPreflightFailureKind_glm-5.1": "preflight",
+      "comboPreflightFailureAt_glm-5.1": new Date().toISOString(),
+      "comboPreflightFailureCount_glm-5.2": 1,
+      "comboPreflightFailureKind_glm-5.2": "preflight",
+      "comboPreflightFailureAt_glm-5.2": new Date().toISOString(),
+    };
+    delete conn["comboPreflightFailureCount_glm-5.1"];
+    delete conn["comboPreflightFailureKind_glm-5.1"];
+    delete conn["comboPreflightFailureAt_glm-5.1"];
+    expect(getComboPreflightInfo(conn, "glm-5.1").count).toBe(0);
+    expect(getComboPreflightInfo(conn, "glm-5.2").count).toBe(1);
   });
 });
