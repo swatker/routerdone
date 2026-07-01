@@ -11,6 +11,22 @@ released upstream.
 
 ## [0.5.94] — 2026-07-01
 
+### Cline REST API Key Support (OpenAI-Compatible)
+- **fix:** Cline REST API keys (`sk_*`) no longer get the `workos:` prefix
+  incorrectly applied. Only OAuth tokens (starting with `workos:`) use
+  `buildClineHeaders()` + `getClineAccessToken()`. REST keys now send a raw
+  `Authorization: Bearer <key>` header. Affects 3 validation routes:
+  `/api/providers/validate`, `/api/provider-nodes/validate`,
+  `/api/providers/[id]/test/testUtils.js`.
+- **fix:** Cline has no `/models` endpoint (returns 404). All validation routes
+  now skip `/models` for Cline base URLs and go straight to
+  `/chat/completions` with a hardcoded test model (`anthropic/claude-sonnet-4.6`).
+- **fix:** `ModelSelectModal.js` `isCustomProvider` branch only read
+  `modelAliases` via `nodeModels` but ignored `customModels` registered through
+  `/api/models/custom` (the "Add Model" button in CompatibleModelsSection).
+  Added `customRegisteredModels` merge so manually-added models (e.g.
+  `cline-pass/mimo-v2.5`) now appear in the combo dropdown.
+
 ### Merged
 - **Merge upstream v0.5.94** — keep all local fixes on top. (`2f26dc4`)
 
