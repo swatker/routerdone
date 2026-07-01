@@ -9,6 +9,35 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/) as
 released upstream.
 
+## [0.5.94] — 2026-07-01
+
+### Merged
+- **Merge upstream v0.5.94** — keep all local fixes on top. (`2f26dc4`)
+
+### Vision Preprocessing (continued)
+- **fix:** skip preprocessing when EVERY model in a combo already has vision
+  capability — eliminates double-vision-call and 502 cascades for combos like
+  `vision` where the only member is `oc/mimo-v2.5-free`. Added
+  `resolveTargetCaps()` to expand combo names and check member capabilities.
+  (`61a1325`, `87f33c9`, `b255bd2`, `d6b27fa`)
+- **feat:** cache vision descriptions by image content hash to avoid repeated
+  Mimo calls across ZCode multi-turn requests. Same image in consecutive turns:
+  Mimo reads once, later turns reuse the cached OCR/description (TTL 6h, LRU,
+  max 500 entries). Keyed by `visionModel + instructionVersion + sha256(image bytes)`.
+  (`ebb524f`)
+
+### Route Policy
+- **fix:** raise combo `adaptiveFirstProductiveTimeoutMs` max from 12s → 45s.
+  Vision models (Mimo) reading real images need 10–15s; the old 12s cap caused
+  preflight deadline = 15s → upstream headers timeout → 502. (`964569f`)
+
+### Auth / Connection Management
+- **fix:** make `comboPreflightFailureCount` per-model instead of per-connection.
+  Previously, 2 preflight timeouts on ANY model escalated to `modelLock___all`,
+  blocking EVERY model on the connection (glm-5.1 timeout → glm-5.2, claude,
+  minimax, qwen all dead for 30s). Now only repeated failures on the SAME model
+  trigger the full connection lock. (`6cd0eed`)
+
 ## [0.5.92] — 2026-06-30
 
 ### Vision Preprocessing
