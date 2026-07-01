@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { assertPublicUrl } from "@/shared/utils/ssrfGuard.js";
 import { isLocalRequest } from "@/dashboardGuard";
+import { buildClineHeaders, getClineAccessToken } from "@/shared/utils/clineAuth";
 
 // Fetch with timeout wrapper
 const fetchWithTimeout = (url, options, timeout = 10000) => {
@@ -21,6 +22,16 @@ const isValidUrl = (url) => {
     return false;
   }
 };
+
+// Detect Cline base URL for special auth handling
+function isClineBaseUrl(url) {
+  try {
+    const hostname = new URL(url).hostname.toLowerCase();
+    return hostname === "api.cline.bot" || hostname.endsWith(".cline.bot");
+}
+catch { return false; }
+}
+
 
 // Parse error details for user-friendly messages
 const getErrorMessage = (error) => {
@@ -124,8 +135,10 @@ export async function POST(request) {
 
       if (res.ok) return NextResponse.json({ valid: true });
 
-      // Auth errors - no point trying chat fallback
-      if (res.status === 401 || res.status === 403) {
+      // Auth errors on /models — try chat fallback if modelId provided
+      // (Some providers like Cline return 401 on /models due to header format,
+      //  but accept the same key on /chat/completions)
+      if ((res.status === 401 || res.status === 403) && !modelId && !isCline) {
         return NextResponse.json({ valid: false, error: "API key unauthorized" });
       }
 
@@ -159,26 +172,52 @@ export async function POST(request) {
     }
 
     // OpenAI Compatible Validation (Default)
-    const modelsUrl = `${baseUrl.replace(/\/$/, "")}/models`;
+    const normalizedBase = baseUrl.replace(/\/$/, "");
+    const isCline = isClineBaseUrl(baseUrl);
+    // Cline: detect OAuth token (workos: prefix) vs REST API key (sk_*)
+    // REST keys use raw Bearer; OAuth tokens need workos: prefix + special headers
+    const isClineOAuth = isCline && apiKey?.trim().startsWith("workos:");
+
+    if (isCline) {
+      // Cline has no /models endpoint — go straight to chat completions
+      const headers = isClineOAuth
+        ? { ...buildClineHeaders(getClineAccessToken(apiKey)), "Content-Type": "application/json" }
+        : { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" };
+      const chatRes = await fetchWithTimeout(`${normalizedBase}/chat/completions`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          model: "anthropic/claude-sonnet-4.6",
+          messages: [{ role: "user", content: "ping" }],
+          max_tokens: 1
+        })
+      });
+      // 401/403 = bad key; anything else (500, 400, 404) = auth passed
+      if (chatRes.status === 401 || chatRes.status === 403) {
+        return NextResponse.json({ valid: false, error: "API key unauthorized" });
+      }
+      return NextResponse.json({ valid: true, method: "chat" });
+    }
+
+    // Standard OpenAI-compatible: try /models first
+    const modelsUrl = `${normalizedBase}/models`;
     const res = await fetchWithTimeout(modelsUrl, {
       headers: { "Authorization": `Bearer ${apiKey}` },
     });
 
     if (res.ok) return NextResponse.json({ valid: true });
 
-    // Auth errors - no point trying chat fallback
-    if (res.status === 401 || res.status === 403) {
+    // Auth errors on /models — try chat fallback if modelId provided
+    // (Some providers return 401 on /models but accept key on /chat/completions)
+    if ((res.status === 401 || res.status === 403) && !modelId) {
       return NextResponse.json({ valid: false, error: "API key unauthorized" });
     }
 
-    // Fallback: try chat/completions if modelId provided
+    // Fallback: try chat/completions with modelId
     if (modelId) {
-      const chatRes = await fetchWithTimeout(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
+      const chatRes = await fetchWithTimeout(`${normalizedBase}/chat/completions`, {
         method: "POST",
-        headers: {
-          "Authorization": `Bearer ${apiKey}`,
-          "Content-Type": "application/json"
-        },
+        headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
         body: JSON.stringify({
           model: modelId,
           messages: [{ role: "user", content: "ping" }],

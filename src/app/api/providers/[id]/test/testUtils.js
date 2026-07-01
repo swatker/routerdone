@@ -17,7 +17,7 @@ import {
   CLINE_CONFIG,
   KILOCODE_CONFIG,
 } from "@/lib/oauth/constants/oauth";
-import { buildClineHeaders } from "@/shared/utils/clineAuth";
+import { buildClineHeaders, getClineAccessToken } from "@/shared/utils/clineAuth";
 
 // OAuth provider test endpoints
 const OAUTH_TEST_CONFIG = {
@@ -93,6 +93,14 @@ const OAUTH_TEST_CONFIG = {
   "codebuddy-cn": { tokenExists: true },
 };
 
+
+// Detect Cline base URL for special auth handling
+function isClineBaseUrl(url) {
+  try {
+    const hostname = new URL(url).hostname.toLowerCase();
+    return hostname === "api.cline.bot" || hostname.endsWith(".cline.bot");
+  } catch { return false; }
+}
 async function probeClineAccessToken(accessToken) {
   const res = await fetch("https://api.cline.bot/api/v1/users/me", {
     method: "GET",
@@ -339,11 +347,45 @@ async function testApiKeyConnection(connection, effectiveProxy = null) {
   if (isOpenAICompatibleProvider(connection.provider)) {
     const modelsBase = connection.providerSpecificData?.baseUrl;
     if (!modelsBase) return { valid: false, error: "Missing base URL" };
+    const isCline = isClineBaseUrl(modelsBase);
+    const isClineOAuth = isCline && connection.apiKey?.trim().startsWith("workos:");
     try {
-      const res = await fetchWithConnectionProxy(`${modelsBase.replace(/\/$/, "")}/models`, {
+      const normalizedBase = modelsBase.replace(/\/$/, "");
+      // Cline: no /models endpoint, go straight to chat
+      if (isCline) {
+        const headers = isClineOAuth
+          ? { ...buildClineHeaders(getClineAccessToken(connection.apiKey)), "Content-Type": "application/json" }
+          : { "Authorization": `Bearer ${connection.apiKey}`, "Content-Type": "application/json" };
+        const chatRes = await fetchWithConnectionProxy(`${normalizedBase}/chat/completions`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            model: "anthropic/claude-sonnet-4.6",
+            messages: [{ role: "user", content: "test" }],
+            max_tokens: 1,
+          }),
+        }, effectiveProxy);
+        const chatValid = chatRes.status !== 401 && chatRes.status !== 403;
+        return { valid: chatValid, error: chatValid ? null : "Invalid API key or base URL" };
+      }
+      // Standard OpenAI-compatible: try /models first
+      const res = await fetchWithConnectionProxy(`${normalizedBase}/models`, {
         headers: { "Authorization": `Bearer ${connection.apiKey}` },
       }, effectiveProxy);
-      return { valid: res.ok, error: res.ok ? null : "Invalid API key or base URL" };
+      if (res.ok) return { valid: true, error: null };
+      // /models failed — try chat/completions fallback
+      const defaultModel = connection.defaultModel || "test";
+      const chatRes = await fetchWithConnectionProxy(`${normalizedBase}/chat/completions`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${connection.apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: defaultModel,
+          messages: [{ role: "user", content: "test" }],
+          max_tokens: 1,
+        }),
+      }, effectiveProxy);
+      const chatValid = chatRes.status !== 401 && chatRes.status !== 403;
+      return { valid: chatValid, error: chatValid ? null : "Invalid API key or base URL" };
     } catch (err) {
       return { valid: false, error: err.message };
     }
