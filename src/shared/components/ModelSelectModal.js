@@ -8,6 +8,7 @@ import CapacityBadges from "./CapacityBadges";
 import { useModelCaps } from "@/shared/hooks/useModelCaps";
 import { getModelsByProviderId, getModelKind } from "@/shared/constants/models";
 import { OAUTH_PROVIDERS, APIKEY_PROVIDERS, FREE_PROVIDERS, FREE_TIER_PROVIDERS, AI_PROVIDERS, isOpenAICompatibleProvider, isAnthropicCompatibleProvider, getProviderAlias } from "@/shared/constants/providers";
+import { normalizeLiveModelValue } from "@/shared/utils/modelValue";
 
 // Provider order: OAuth first, then Free Tier, then API Key (matches dashboard/providers)
 const PROVIDER_ORDER = [
@@ -153,14 +154,14 @@ export default function ModelSelectModal({
 
   const allProviders = useMemo(() => ({ ...OAUTH_PROVIDERS, ...FREE_PROVIDERS, ...FREE_TIER_PROVIDERS, ...APIKEY_PROVIDERS }), []);
   const normalizeSearch = useCallback((value) => String(value || "").toLowerCase().replace(/[,，]/g, "."), []);
-  const mergeLiveModels = useCallback((providerId, alias, fallbackModels = [], connectionId = null) => {
+  const mergeLiveModels = useCallback((providerId, alias, fallbackModels = [], connectionId = null, options = {}) => {
     const liveModels = liveModelsByProvider[connectionId] || liveModelsByProvider[providerId] || [];
     const merged = [...fallbackModels];
     const seen = new Set(merged.map((m) => m.value));
     for (const model of liveModels) {
       const modelId = String(model?.id || model?.name || model?.model || "");
       if (!modelId) continue;
-      const value = modelId.includes("/") ? modelId : `${alias}/${modelId}`;
+      const value = normalizeLiveModelValue(modelId, alias, options);
       if (seen.has(value)) continue;
       seen.add(value);
       merged.push({
@@ -320,7 +321,8 @@ export default function ModelSelectModal({
           }));
 
         const mergedModels = [...nodeModels, ...customRegisteredModels];
-        const liveNodeModels = mergeLiveModels(providerId, nodePrefix, mergedModels, connection?.id || connection?.connectionId);
+        // forceAliasPrefix: keep alias prefix for native model IDs containing slashes (v0.5.98)
+        const liveNodeModels = mergeLiveModels(providerId, nodePrefix, mergedModels, connection?.id || connection?.connectionId, { forceAliasPrefix: true });
 
         // Always show compatible providers that are connected, even with no aliases.
         // Prefer live /models output; fall back to placeholder when the provider cannot list models.
