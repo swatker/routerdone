@@ -240,7 +240,7 @@ export function extractUsage(chunk) {
  */
 export function estimateInputTokens(body) {
   if (!body || typeof body !== "object") return 0;
-  return estimateRequestTokens(body);
+  return estimateRequestTokens(body, body?.model);
 }
 
 /**
