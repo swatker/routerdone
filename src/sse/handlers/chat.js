@@ -279,6 +279,15 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
   const routeMode = attemptContext.routeMode || (attemptContext.comboName ? "combo" : "direct");
   const ignoreModelLocks = routeMode === "combo" || routeMode === "fusion";
 
+  // Inline self-heal retry: when a provider has only one active connection and
+  // the upstream returns a transient (self-heal) error, locking that sole
+  // connection would surface the error to the client with no fallback path.
+  // Instead, wait briefly and retry the same connection. Capped so a genuinely
+  // broken upstream still fails fast instead of looping forever.
+  const SELF_HEAL_INLINE_MAX = 2;
+  const SELF_HEAL_INLINE_WAIT_MS = 3000;
+  let selfHealInlineAttempts = 0;
+
   while (true) {
     const credentials = await getProviderCredentials(provider, excludeConnectionIds, model, { ignoreModelLocks });
 
@@ -373,9 +382,21 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
     if (result.success) return result.response;
 
     // Mark account unavailable (auto-calculates cooldown with exponential backoff, or precise resetsAtMs)
-    const { shouldFallback } = await markAccountUnavailable(credentials.connectionId, result.status, result.error, provider, model, result.resetsAtMs);
+    const { shouldFallback, selfHeal, soleActive } = await markAccountUnavailable(credentials.connectionId, result.status, result.error, provider, model, result.resetsAtMs);
 
     if (shouldFallback) {
+      // Self-heal (transient) error on a sole active connection: the lock was
+      // suppressed in markAccountUnavailable so the connection stays selectable.
+      // Wait briefly and retry it inline, instead of excluding it (which would
+      // immediately surface all_accounts_locked to the client with no fallback).
+      if (selfHeal && soleActive && selfHealInlineAttempts < SELF_HEAL_INLINE_MAX) {
+        selfHealInlineAttempts++;
+        log.warn("AUTH", `Account ${credentials.connectionName} self-heal retry ${selfHealInlineAttempts}/${SELF_HEAL_INLINE_MAX} after ${Math.round(SELF_HEAL_INLINE_WAIT_MS / 1000)}s`);
+        lastError = result.error;
+        lastStatus = result.status;
+        await new Promise(r => setTimeout(r, SELF_HEAL_INLINE_WAIT_MS));
+        continue;
+      }
       log.warn("AUTH", `Account ${credentials.connectionName} unavailable (${result.status}), trying fallback`);
       excludeConnectionIds.add(credentials.connectionId);
       lastError = result.error;

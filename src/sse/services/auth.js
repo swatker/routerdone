@@ -1,6 +1,6 @@
 ﻿import { getProviderConnections, validateApiKey, updateProviderConnection, getSettings } from "@/lib/localDb";
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
-import { formatRetryAfter, checkFallbackError, isModelLockActive, buildModelLockUpdate, getEarliestModelLockUntil, isBusyConcurrencyError, isPreflightTimeoutError, shouldLockConnectionForError, resolveConnectionCooldownMs, buildModelFailureBackoffUpdate, buildClearModelFailureUpdate, isRateLimitError, isProviderSelfHealError, shouldDisableConnectionForError } from "open-sse/services/accountFallback.js";
+import { formatRetryAfter, checkFallbackError, isModelLockActive, buildModelLockUpdate, getModelLockKey, getEarliestModelLockUntil, isBusyConcurrencyError, isPreflightTimeoutError, shouldLockConnectionForError, resolveConnectionCooldownMs, buildModelFailureBackoffUpdate, buildClearModelFailureUpdate, isRateLimitError, isProviderSelfHealError, shouldDisableConnectionForError, isSoleActiveConnection } from "open-sse/services/accountFallback.js";
 import { MAX_RATE_LIMIT_COOLDOWN_MS } from "open-sse/config/errorConfig.js";
 import { resolveProviderId, FREE_PROVIDERS } from "@/shared/constants/providers.js";
 import * as log from "../utils/logger.js";
@@ -289,8 +289,22 @@ export async function markAccountUnavailable(connectionId, status, errorText, pr
     failureCounterUpdate = backoff.update;
   }
 
+  // Self-heal (transient) errors on a provider with only one active connection:
+  // do NOT lock the model. Locking the sole connection — even for the short 3s
+  // self-heal window — surfaces the error to the client (no second account to
+  // fall back to). Instead, leave the connection selectable so the caller's
+  // retry loop can re-attempt immediately after a brief inline wait.
+  const soleActive = isSoleActiveConnection(connections, connectionId);
+  const isSelfHealError = selfHeal || isProviderSelfHealError(status, reasonText);
+  const suppressLock = isSelfHealError && soleActive && !lockConnection;
+  if (suppressLock) {
+    cooldownMs = 0;
+  }
+
   const reason = reasonText.slice(0, 100);
-  const lockUpdate = buildModelLockUpdate(lockConnection ? null : model, cooldownMs);
+  const lockUpdate = suppressLock
+    ? { [getModelLockKey(model)]: null }
+    : buildModelLockUpdate(lockConnection ? null : model, cooldownMs);
   // Per-model comboPreflight counters write (via comboPreflightFields helper)
   const cpWrite = comboPreflightFields(model);
   const failureUpdate = (busyOrConcurrency || preflightTimeout)
@@ -322,13 +336,17 @@ export async function markAccountUnavailable(connectionId, status, errorText, pr
 
   const lockKey = Object.keys(lockUpdate)[0];
   const connName = conn?.displayName || conn?.name || conn?.email || connectionId.slice(0, 8);
-  log.warn("AUTH", `${connName} locked ${lockKey} for ${Math.round(cooldownMs / 1000)}s [${status}]`);
+  if (suppressLock) {
+    log.warn("AUTH", `${connName} self-heal error, no other account — retrying inline instead of locking [${status}]`);
+  } else {
+    log.warn("AUTH", `${connName} locked ${lockKey} for ${Math.round(cooldownMs / 1000)}s [${status}]`);
+  }
 
   if (provider && status && reason) {
     console.error(`❌ ${provider} [${status}]: ${reason}`);
   }
 
-  return { shouldFallback: true, cooldownMs };
+  return { shouldFallback: true, cooldownMs, selfHeal: isSelfHealError, soleActive };
 }
 
 /**
