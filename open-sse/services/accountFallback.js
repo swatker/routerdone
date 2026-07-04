@@ -249,25 +249,6 @@ export function buildModelLockUpdate(model, cooldownMs) {
 }
 
 /**
- * Check whether the given connection is the only active connection for its
- * provider. Used to decide whether a self-heal (transient) error should
- * trigger an inline retry rather than an account lock: when there is a second
- * active account, the normal fallback path handles it; when there is only one,
- * locking it (even for 3s) surfaces the error to the client unnecessarily.
- *
- * @param {Array} connections - all connections for the provider (any isActive)
- * @param {string} connectionId - id of the connection that just failed
- * @returns {boolean} true when no other active connection exists
- */
-export function isSoleActiveConnection(connections, connectionId) {
-  if (!Array.isArray(connections) || !connectionId) return false;
-  const activeOthers = connections.filter(
-    c => c?.id !== connectionId && c?.isActive !== false && c?.isActive !== 0,
-  );
-  return activeOthers.length === 0;
-}
-
-/**
  * Build update object to clear all model locks on a connection.
  */
 export function buildClearModelLocksUpdate(connection) {
