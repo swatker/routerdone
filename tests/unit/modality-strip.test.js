@@ -126,6 +126,14 @@ describe("stripUnsupportedModalities", () => {
     expect(body.input[0].output[0].image_url).toBe("data:image/png;base64,QUJD");
   });
 
+  it("responses: keeps remote output image_url when vision:true", () => {
+    const body = { input: [{ type: "message", output: [
+      { type: "input_image", image_url: "https://example.com/a.png" },
+    ] }] };
+    expect(stripUnsupportedModalities(body, FORMATS.OPENAI_RESPONSES, ALL)).toBe(false);
+    expect(body.input[0].output[0].image_url).toBe("https://example.com/a.png");
+  });
+
   it("handles missing/empty body safely", () => {
     expect(stripUnsupportedModalities(null, FORMATS.OPENAI, NO_VISION)).toBe(false);
     expect(stripUnsupportedModalities({}, FORMATS.OPENAI, null)).toBe(false);

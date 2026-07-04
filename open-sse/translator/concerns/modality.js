@@ -49,10 +49,14 @@ function isImageDataUrl(value) {
   }
 }
 
+function isImageUrl(value) {
+  return isImageDataUrl(value) || /^https?:\/\/\S+$/i.test(value);
+}
+
 function hasInvalidResponsesOutputImageUrl(body) {
   return Array.isArray(body?.input) && body.input.some((item) =>
     Array.isArray(item?.output) && item.output.some((b) =>
-      Object.hasOwn(b || {}, "image_url") && !isImageDataUrl(b.image_url)
+      Object.hasOwn(b || {}, "image_url") && !isImageUrl(b.image_url)
     )
   );
 }
@@ -128,7 +132,7 @@ function stripResponses(body, caps) {
         const isImage = b?.type === "input_image" || Object.hasOwn(b || {}, "image_url");
         if (!isImage) return true;
         if (caps.vision === false) { removed.add("vision"); return false; }
-        if (!isImageDataUrl(b.image_url)) { removedInvalidImage = true; return false; }
+        if (!isImageUrl(b.image_url)) { removedInvalidImage = true; return false; }
         return true;
       });
       for (const cap of removed) item.output.push({ type: "output_text", text: ph(cap, i === last) });
