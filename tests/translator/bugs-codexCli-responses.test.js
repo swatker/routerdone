@@ -3,11 +3,24 @@ import { describe, it, expect } from "vitest";
 import "./registerAll.js";
 import { translateRequest } from "../../open-sse/translator/index.js";
 import { FORMATS } from "../../open-sse/translator/formats.js";
+import { getCapabilitiesForModel } from "../../open-sse/providers/capabilities.js";
 
 const R2O = (body) => translateRequest(FORMATS.OPENAI_RESPONSES, FORMATS.OPENAI, "m", body, true, null, null);
 const O2R = (body) => translateRequest(FORMATS.OPENAI, FORMATS.OPENAI_RESPONSES, "m", body, true, null, null);
 
 describe("Codex CLI Responses → OpenAI", () => {
+  it("folds output image_url blocks into OpenAI chat content", () => {
+    const out = R2O({
+      input: [{ type: "message", output: [
+        { type: "input_image", image_url: "https://example.com/a.png" },
+      ] }],
+    });
+    expect(out.messages[0].role).toBe("user");
+    expect(out.messages[0].content).toEqual([
+      { type: "image_url", image_url: { url: "https://example.com/a.png", detail: "auto" } },
+    ]);
+  });
+
   // openai-responses.js:103 — function_call with empty name skipped, can leave tool_calls: []
   // KNOWN BUG: empty tool_calls array is rejected by OpenAI/Codex
   it.fails("assistant has no empty tool_calls array when all names are empty", () => {
@@ -42,6 +55,13 @@ describe("Codex CLI Responses → OpenAI", () => {
     const img = Array.isArray(userMsg?.content) ? userMsg.content.find((c) => c.type === "image_url") : null;
     // A bare file_id is not a valid image URL
     expect(img?.image_url?.url === "file-abc").toBe(false);
+  });
+});
+
+describe("GLM vision capabilities", () => {
+  it("marks glm-5v-turbo as vision and keeps glm-5.2 text-only", () => {
+    expect(getCapabilitiesForModel("glm", "glm-5v-turbo").vision).toBe(true);
+    expect(getCapabilitiesForModel("glm", "glm-5.2").vision).toBe(false);
   });
 });
 

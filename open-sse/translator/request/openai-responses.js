@@ -6,7 +6,7 @@
  */
 import { register } from "../index.js";
 import { FORMATS } from "../formats.js";
-import { normalizeResponsesInput } from "../formats/responsesApi.js";
+import { normalizeResponsesInput, toOpenAIContentBlock } from "../formats/responsesApi.js";
 import { ROLE, OPENAI_BLOCK, RESPONSES_ITEM } from "../schema/index.js";
 
 // Responses API enforces max 64 chars on call_id (#393)
@@ -67,19 +67,14 @@ export function openaiResponsesToOpenAIRequest(model, body, stream, credentials)
         pendingToolResults = [];
       }
 
-      // Convert content: input_text → text, output_text → text, input_image → image_url
-      const content = Array.isArray(item.content)
-        ? item.content.map(c => {
-          if (c.type === RESPONSES_ITEM.INPUT_TEXT) return { type: OPENAI_BLOCK.TEXT, text: c.text };
-          if (c.type === RESPONSES_ITEM.OUTPUT_TEXT) return { type: OPENAI_BLOCK.TEXT, text: c.text };
-          if (c.type === RESPONSES_ITEM.INPUT_IMAGE) {
-            const url = c.image_url || c.file_id || "";
-            return { type: OPENAI_BLOCK.IMAGE_URL, image_url: { url, detail: c.detail || "auto" } };
-          }
-          return c;
-        })
+      // Convert content/output: input_text/output_text -> text, image blocks -> image_url.
+      const blocks = [];
+      if (Array.isArray(item.content)) blocks.push(...item.content);
+      if (Array.isArray(item.output)) blocks.push(...item.output);
+      const content = blocks.length > 0
+        ? blocks.map(toOpenAIContentBlock)
         : item.content;
-      const msg = { role: item.role, content };
+      const msg = { role: item.role || ROLE.USER, content };
       // Attach buffered reasoning to assistant turn (required by xiaomi-mimo thinking mode)
       if (item.role === ROLE.ASSISTANT && pendingReasoning) {
         msg.reasoning_content = pendingReasoning;
