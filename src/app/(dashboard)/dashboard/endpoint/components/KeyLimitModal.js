@@ -9,7 +9,11 @@ import { Modal, Button, Input } from "@/shared/components";
 // derived from props once per opened key — no hydrate-from-props effect.
 // Props:
 //   isOpen, onClose, keyRecord (the apiKeys row), onSaved (callback after PUT)
-// Fetches /v1/models (for the model dropdown) and /api/combos (for combos).
+// Fetches the model list from the UNION of /api/models (static known-model
+// catalog, Combos page source) and /v1/models (live resolved from active
+// provider connections). Either source alone can be empty in normal setups:
+// /api/models is empty on fresh DBs before alias seeding; /v1/models is empty
+// when no provider is connected. The union keeps the picker populated.
 export default function KeyLimitModal({ isOpen, onClose, keyRecord, onSaved }) {
   const [limitType, setLimitType] = useState(keyRecord?.limitType || "unlimited"); // unlimited | total | daily
   const [tokenLimit, setTokenLimit] = useState(
@@ -30,23 +34,39 @@ export default function KeyLimitModal({ isOpen, onClose, keyRecord, onSaved }) {
   const [error, setError] = useState("");
 
   // Load model + combo options once when first opened.
+  // The model list is the UNION of two sources so the picker is never empty
+  // in normal setups:
+  //   - /api/models: static known-model catalog (Combos page source). Stable
+  //     even when no provider is connected.
+  //   - /v1/models: live models resolved from ACTIVE provider connections.
+  //     Includes compatible-provider / custom / aliased models not in the
+  //     static catalog.
+  // The combo picker (also /api/combos) is independent — combos are user-
+  // defined rows, not derived from provider connections.
   useEffect(() => {
     if (!isOpen) return;
     let cancelled = false;
     (async () => {
       try {
-        const [modelsRes, combosRes] = await Promise.all([
+        const [staticRes, liveRes, combosRes] = await Promise.all([
+          fetch("/api/models").then((r) => r.json()).catch(() => ({ models: [] })),
           fetch("/v1/models").then((r) => r.json()).catch(() => ({ data: [] })),
           fetch("/api/combos").then((r) => r.json()).catch(() => ({ combos: [] })),
         ]);
         if (cancelled) return;
-        const modelIds = (modelsRes?.data || []).map((m) => m.id).filter(Boolean).sort();
+        // /api/models -> { models: [{ provider, model, fullModel, ... }] }
+        const staticIds = (staticRes?.models || [])
+          .map((m) => m.fullModel || (m.provider && m.model ? `${m.provider}/${m.model}` : m.id))
+          .filter(Boolean);
+        // /v1/models -> { data: [{ id, ... }] }
+        const liveIds = (liveRes?.data || []).map((m) => m.id).filter(Boolean);
+        const modelIds = Array.from(new Set([...staticIds, ...liveIds])).sort();
         setModels(modelIds);
         const comboNames = (combosRes?.combos || []).map((c) => c.name).filter(Boolean).sort();
         setCombos(comboNames);
         // Auto-fall-back to custom-mode when the saved value is non-empty but
-        // missing from /v1/models (disconnected provider, custom/aliased model,
-        // CLI wire name). Prevents the <select> from silently dropping the value.
+        // missing from both sources (custom/aliased model, CLI wire name).
+        // Prevents the <select> from silently dropping the value.
         if (
           allowedType === "model" &&
           allowedValue &&
