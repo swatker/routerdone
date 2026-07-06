@@ -5,11 +5,11 @@ import {
   markAccountUnavailable,
   clearAccountError,
   extractApiKey,
-  isValidApiKey,
 } from "../services/auth.js";
 import { cacheClaudeHeaders } from "open-sse/utils/claudeHeaderCache.js";
-import { getSettings } from "@/lib/localDb";
+import { getSettings, getApiKeyByRawKey } from "@/lib/localDb";
 import { getModelInfo, getComboModels } from "../services/model.js";
+import { checkModelAllowed, checkKeyQuota } from "../services/keyPolicy.js";
 import { handleChatCore } from "open-sse/handlers/chatCore.js";
 import { DEFAULT_HEADROOM_URL } from "@/lib/headroom/detect";
 import { errorResponse, unavailableResponse } from "open-sse/utils/error.js";
@@ -82,14 +82,20 @@ export async function handleChat(request, clientRawRequest = null) {
     log.debug("AUTH", "No API key provided (local mode)");
   }
 
-  // Enforce API key if enabled in settings
+  // Enforce API key if enabled in settings. Also load the full key record
+  // (when a key is present) so the per-key model-restriction and quota
+  // policies below have everything they need in one DB hit.
   const settings = await getSettings();
+  let keyRecord = null;
+  if (apiKey) {
+    keyRecord = await getApiKeyByRawKey(apiKey).catch(() => null);
+  }
   if (settings.requireApiKey) {
     if (!apiKey) {
       log.warn("AUTH", "Missing API key (requireApiKey=true)");
       return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Missing API key");
     }
-    const valid = await isValidApiKey(apiKey);
+    const valid = keyRecord && keyRecord.isActive;
     if (!valid) {
       log.warn("AUTH", "Invalid API key (requireApiKey=true)");
       return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Invalid API key");
@@ -116,6 +122,43 @@ export async function handleChat(request, clientRawRequest = null) {
   }
 
 
+  // Per-API-key policy gate (resale / donate quota). modelStr is now the
+  // post-redirect effective requested name — the right value to match a
+  // "specific model" or "specific combo" restriction against. Run this before
+  // vision preprocessing so denied/quota-exceeded requests do not spend a
+  // secondary vision call.
+  if (keyRecord) {
+    const modelDecision = await checkModelAllowed(modelStr, keyRecord);
+    if (!modelDecision.allowed) {
+      log.warn("KEY-POLICY", `Model "${modelStr}" denied for key ${log.maskKey(apiKey)}: ${modelDecision.detail}`);
+      return new Response(JSON.stringify({
+        error: {
+          message: modelDecision.detail || "This API key is not allowed to use the requested model.",
+          type: "permission_denied",
+          code: modelDecision.reason || "model_not_allowed",
+        },
+      }), { status: HTTP_STATUS.FORBIDDEN, headers: { "Content-Type": "application/json" } });
+    }
+
+    const quotaDecision = checkKeyQuota(keyRecord, { body, modelStr });
+    if (!quotaDecision.allowed) {
+      const resetTxt = quotaDecision.resetAt ? ` Resets at ${new Date(quotaDecision.resetAt).toISOString()}.` : "";
+      const msg = `You exceeded your current API key token quota (used ${quotaDecision.used} of ${quotaDecision.limit} tokens, this request needs ~${quotaDecision.estimatedInput} more).${resetTxt}`;
+      log.warn("KEY-POLICY", `Quota denied for key ${log.maskKey(apiKey)}: used=${quotaDecision.used} limit=${quotaDecision.limit} estInput=${quotaDecision.estimatedInput}`);
+      return new Response(JSON.stringify({
+        error: {
+          message: msg,
+          type: "insufficient_quota",
+          code: quotaDecision.reason || "quota_exceeded",
+          used: quotaDecision.used,
+          limit: quotaDecision.limit,
+          estimated_input: quotaDecision.estimatedInput,
+          ...(quotaDecision.resetAt ? { reset_at: quotaDecision.resetAt } : {}),
+        },
+      }), { status: HTTP_STATUS.RATE_LIMITED, headers: { "Content-Type": "application/json" } });
+    }
+  }
+
   // Vision preprocessing: if body has images, preprocess through a vision model
   // to convert image blocks to OCR text. This runs BEFORE combo dispatch so that
   // the same text context is available to all models in the combo, and images are
@@ -126,13 +169,12 @@ export async function handleChat(request, clientRawRequest = null) {
   // a text description that then re-hits the same vision model).
   if (hasImageContent(body)) {
     try {
-      const visionSettings = await getSettings();
       const targetCaps = await resolveTargetCaps(modelStr, {
         getModelInfo,
         getComboModels,
         getCapabilitiesForModel,
       });
-      const preprocessed = await preprocessVisionContent(body, visionSettings, log, targetCaps);
+      const preprocessed = await preprocessVisionContent(body, settings, log, targetCaps);
       if (preprocessed) {
         body = preprocessed;
         log.info("VISION", "Images preprocessed for combo/direct model: " + modelStr);
@@ -141,6 +183,7 @@ export async function handleChat(request, clientRawRequest = null) {
       log.warn("VISION", "Preprocessing error: " + e.message + " (non-fatal)");
     }
   }
+
   // Check if model is a combo (has multiple models with fallback)
   const comboModels = await getComboModels(modelStr);
   if (comboModels) {

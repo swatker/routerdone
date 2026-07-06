@@ -9,6 +9,35 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/) as
 released upstream.
 
+## [0.5.113] — 2026-07-06
+
+### Merged
+- **Merge upstream v0.5.113** — brings RouterDone current with upstream while
+  preserving local fork behavior. Upstream additions include per-API-key token
+  quota, model/combo restrictions, tokenizer-based usage accounting, API-key
+  model picker fixes, `glm-coding-plan` provider scaffold, password env
+  precedence support, and `zcodedone` sidecar naming/docs.
+
+### Preserved local fixes
+- **Vision preprocessing** remains active after the upstream key policy gate:
+  image requests are still converted to OCR/description text for non-vision
+  targets before combo dispatch, with combo capability detection and cache
+  behavior preserved.
+- **Cline validation fixes** remain active: Cline base URLs skip `/models`, REST
+  keys use raw `Authorization: Bearer <key>`, and OAuth tokens still use
+  `workos:` extraction/headers.
+- **Custom registered models in combo picker** remain preserved via the existing
+  `/api/models/custom` merge in `ModelSelectModal.js`.
+
+### Quality gate
+- Syntax checks passed for critical changed files.
+- `tests/vision-preprocessor.test.mjs`: 19/19 passed.
+- `vitest` unit subset: 65/65 passed (`key-policy`, `password-auth`,
+  `force-stream-openai-compat`, `model-failure-backoff`).
+- `npm run build`: passed.
+- `npm run verify:dokploy`: skipped by environment — local Windows machine does
+  not have Docker CLI (`docker is not recognized`).
+
 ## [0.5.94] — 2026-07-01
 
 ### Cline REST API Key Support (OpenAI-Compatible)
