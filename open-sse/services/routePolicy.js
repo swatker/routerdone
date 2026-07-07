@@ -69,19 +69,15 @@ export function isRetryableTransientStatus(status) {
   return TRANSIENT_RETRY_STATUSES.has(Number(status));
 }
 
-export function adaptiveFirstProductiveTimeoutMs(routeMode, fallbackMs, stats = null) {
-  // Clamp even without stats so saved per-combo overrides cannot inflate the
-  // attempt deadline above what the route mode actually tolerates. The combo
-  // cap is generous (45s) because vision-only combos may route to a vision model
-  // that needs ~10-15s per image; combos without an explicit preflight override
-  // still use the 9s base default, so only combos that opt in get the headroom.
+function clampRouteFirstProductiveTimeoutMs(routeMode, fallbackMs) {
+  // Clamp saved per-combo overrides so an old/high dashboard value cannot
+  // inflate an attempt deadline above what the route mode actually tolerates.
   const bounds = routeMode === "combo"
     ? { min: 4000, max: 45000 }
     : routeMode === "fusion"
       ? { min: 3000, max: 8000 }
       : { min: 5000, max: fallbackMs };
-  if (!stats || !Number.isFinite(stats.p90TtftMs)) return clamp(fallbackMs, bounds.min, bounds.max);
-  return clamp(Math.round(stats.p90TtftMs * 1.8 + 1500), bounds.min, bounds.max);
+  return clamp(fallbackMs, bounds.min, bounds.max);
 }
 
 export function resolveRoutePolicy(routeMode = "direct", overrides = {}) {
@@ -92,7 +88,7 @@ export function resolveRoutePolicy(routeMode = "direct", overrides = {}) {
   const firstProductiveDefault = legacyFirstProductive ?? streamOverrides.firstProductiveTimeoutMs ?? base.stream.firstProductiveTimeoutMs;
   const stream = {
     firstByteTimeoutMs: toMs(streamOverrides.firstByteTimeoutMs, base.stream.firstByteTimeoutMs),
-    firstProductiveTimeoutMs: adaptiveFirstProductiveTimeoutMs(key, toMs(firstProductiveDefault, base.stream.firstProductiveTimeoutMs), overrides.ttftStats),
+    firstProductiveTimeoutMs: clampRouteFirstProductiveTimeoutMs(key, toMs(firstProductiveDefault, base.stream.firstProductiveTimeoutMs)),
     idleAfterProductiveMs: toMs(streamOverrides.idleAfterProductiveMs, base.stream.idleAfterProductiveMs),
     totalBudgetMs: toMs(streamOverrides.totalBudgetMs, base.stream.totalBudgetMs),
   };

@@ -14,6 +14,14 @@ const parseOpenAIStyleModels = (data) => {
   return data?.data || data?.models || data?.results || [];
 };
 
+function logModelsFetchError(provider, response, errorText) {
+  if (response.status === 404) {
+    console.debug(`Models endpoint not available for ${provider}: ${errorText}`);
+    return;
+  }
+  console.log(`Error fetching models from ${provider}:`, errorText);
+}
+
 const parseGeminiCliModels = (data) => {
   if (Array.isArray(data?.models)) {
     return data.models
@@ -352,7 +360,7 @@ const PROVIDER_MODELS_CONFIG = {
       });
       if (!response.ok) {
         const errorText = await response.text();
-        console.log("Error fetching models from ollama-local:", errorText);
+        logModelsFetchError("ollama-local", response, errorText);
         return { error: `Failed to fetch models: ${response.status}`, status: response.status };
       }
       const data = await response.json();
@@ -389,7 +397,7 @@ export async function GET(request, { params }) {
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.log(`Error fetching models from ${connection.provider}:`, errorText);
+        logModelsFetchError(connection.provider, response, errorText);
         return NextResponse.json(
           { error: `Failed to fetch models: ${response.status}` },
           { status: response.status }
@@ -430,7 +438,7 @@ export async function GET(request, { params }) {
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.log(`Error fetching models from ${connection.provider}:`, errorText);
+        logModelsFetchError(connection.provider, response, errorText);
         return NextResponse.json(
           { error: `Failed to fetch models: ${response.status}` },
           { status: response.status }
@@ -504,7 +512,7 @@ export async function GET(request, { params }) {
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.log(`Error fetching models from ${connection.provider}:`, errorText);
+      logModelsFetchError(connection.provider, response, errorText);
       return NextResponse.json(
         { error: `Failed to fetch models: ${response.status}` },
         { status: response.status }
