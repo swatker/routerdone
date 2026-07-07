@@ -5,6 +5,7 @@ import { DETECT_WINDOW, READ_NUMBERED_MIN_HIT_RATIO, SMART_TRUNCATE_MIN_LINES, S
 import { gitDiff } from "./filters/gitDiff.js";
 import { gitStatus } from "./filters/gitStatus.js";
 import { buildOutput } from "./filters/buildOutput.js";
+import { gitLog } from "./filters/gitLog.js";
 import { grep } from "./filters/grep.js";
 import { find } from "./filters/find.js";
 import { dedupLog } from "./filters/dedupLog.js";
@@ -22,12 +23,14 @@ const RE_BUILD_OUTPUT = /^(npm (warn|error|ERR!)|yarn (warn|error)|\s*Compiling\
 const RE_TREE_GLYPH = /[├└]──|│  /;
 const RE_LS_ROW = /^[-dlbcps][rwx-]{9}/m;
 const RE_LS_TOTAL = /^total \d+$/m;
+const RE_GIT_LOG_COMMIT = /^commit [0-9a-f]{7,40}$/im;
 
 export function autoDetectFilter(text) {
   // Rust: floor_char_boundary to avoid UTF-8 split — JS .slice() by char is safe
   const head = text.length > DETECT_WINDOW ? text.slice(0, DETECT_WINDOW) : text;
 
   if (RE_GIT_DIFF.test(head) || RE_GIT_DIFF_HUNK.test(head)) return gitDiff;
+  if (RE_GIT_LOG_COMMIT.test(head)) return gitLog;
   if (RE_GIT_STATUS.test(head)) return gitStatus;
 
   // Build output BEFORE porcelain check: prevents cargo "Compiling" misdetection as git-status
