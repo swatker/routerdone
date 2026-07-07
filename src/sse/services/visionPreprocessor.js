@@ -231,7 +231,9 @@ async function extractImagesFromMessage(msg, log) {
 function buildVisionRequestFromImages(imageBlocks) {
   if (!imageBlocks?.length) return null;
   return {
-    stream: false,
+    // Use streaming for vision loopback. Heavy image prompts can take long enough
+    // that non-streaming providers/proxies time out before the first byte.
+    stream: true,
     model: "",
     messages: [{
       role: "user",
@@ -241,6 +243,68 @@ function buildVisionRequestFromImages(imageBlocks) {
       ],
     }],
   };
+}
+
+function parseVisionSSEToOpenAIResponse(rawSSE, fallbackModel) {
+  const contentParts = [];
+  const reasoningParts = [];
+  let id = null;
+  let created = null;
+  let model = fallbackModel;
+  let finishReason = "stop";
+  let usage = null;
+
+  for (const line of String(rawSSE || "").split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("data:")) continue;
+    const payload = trimmed.slice(5).trim();
+    if (!payload || payload === "[DONE]") continue;
+
+    try {
+      const chunk = JSON.parse(payload);
+      id ||= chunk.id;
+      created ||= chunk.created;
+      model ||= chunk.model;
+      if (chunk?.usage && typeof chunk.usage === "object") usage = chunk.usage;
+
+      const choice = chunk?.choices?.[0];
+      const delta = choice?.delta || {};
+      if (typeof delta.content === "string") contentParts.push(delta.content);
+      if (typeof delta.reasoning_content === "string") reasoningParts.push(delta.reasoning_content);
+      if (choice?.finish_reason) finishReason = choice.finish_reason;
+    } catch {
+      // Ignore malformed SSE lines and keep parsing later chunks.
+    }
+  }
+
+  if (contentParts.length === 0 && reasoningParts.length === 0) return null;
+
+  const message = { role: "assistant", content: contentParts.join("") };
+  if (reasoningParts.length > 0) message.reasoning_content = reasoningParts.join("");
+
+  const result = {
+    id: id || `chatcmpl-${Date.now()}`,
+    object: "chat.completion",
+    created: created || Math.floor(Date.now() / 1000),
+    model: model || "unknown",
+    choices: [{ index: 0, message, finish_reason: finishReason }],
+  };
+  if (usage) result.usage = usage;
+  return result;
+}
+
+async function readVisionResponse(response, visionModel) {
+  const contentType = response.headers?.get?.("content-type") || "";
+  const shouldParseAsSSE = contentType.includes("text/event-stream");
+
+  if (shouldParseAsSSE) {
+    const rawSSE = await response.text();
+    return parseVisionSSEToOpenAIResponse(rawSSE, visionModel);
+  }
+
+  // Some adapters may accept stream:true but still normalize the upstream stream
+  // back to JSON. Keep this fallback so vision preprocessing works with both.
+  return response.json();
 }
 
 // Extract the vision model's textual description from its chat completion
@@ -428,7 +492,7 @@ export async function preprocessVisionContent(body, settings, log, targetCaps) {
       return body;
     }
 
-    const data = await response.json();
+    const data = await readVisionResponse(response, visionModel);
     const visionText = extractVisionText(data);
 
     if (!visionText || !visionText.trim()) {

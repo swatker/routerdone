@@ -172,6 +172,7 @@ test("cache: same image reuses cached description (no second vision call)", asyn
     calls.push(JSON.parse(opts.body));
     return Promise.resolve({
       ok: true,
+      headers: { get: () => "application/json" },
       json: () => Promise.resolve({
         choices: [{ message: { content: "cached description of image" } }],
       }),
@@ -196,6 +197,7 @@ test("cache: same image reuses cached description (no second vision call)", asyn
     const first = await preprocessVisionContent(body1, settings, noLog, { vision: false });
     assert.ok(first, "first call should preprocess image");
     assert.equal(calls.length, 1, "first call should call vision model once");
+    assert.equal(calls[0].stream, true, "vision preprocessing should call the vision model with stream:true to avoid non-streaming timeouts");
     assert.match(JSON.stringify(first.messages[0].content), /cached description/);
 
     // Second call with same image — should use cache
@@ -216,6 +218,51 @@ test("cache: same image reuses cached description (no second vision call)", asyn
     assert.equal(stats.size, 1, "cache should have 1 entry");
     assert.equal(stats.hits, 1, "cache should have 1 hit (second call)");
     assert.equal(stats.misses, 1, "cache should have 1 miss (first call)");
+  } finally {
+    globalThis.fetch = originalFetch;
+    clearVisionDescriptionCache();
+  }
+});
+
+test("vision preprocessing parses streaming SSE responses", async () => {
+  clearVisionDescriptionCache();
+  const calls = [];
+  const fakeFetch = (_url, opts) => {
+    calls.push(JSON.parse(opts.body));
+    const sse = [
+      'data: {"id":"chatcmpl-test","choices":[{"index":0,"delta":{"role":"assistant","content":"streamed "},"finish_reason":null}]}',
+      '',
+      'data: {"id":"chatcmpl-test","choices":[{"index":0,"delta":{"content":"vision text"},"finish_reason":null}]}',
+      '',
+      'data: [DONE]',
+      '',
+    ].join("\n");
+    return Promise.resolve({
+      ok: true,
+      headers: { get: () => "text/event-stream; charset=utf-8" },
+      text: () => Promise.resolve(sse),
+    });
+  };
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = fakeFetch;
+
+  try {
+    const settings = { visionPreprocessingEnabled: true, visionPreprocessingModel: "oc/mimo-v2.5-free" };
+    const body = {
+      model: "combo/zcode",
+      stream: false,
+      messages: [{ role: "user", content: [
+        { type: "text", text: "what is this?" },
+        { type: "image_url", image_url: { url: FAKE_IMG } },
+      ] }],
+    };
+
+    const result = await preprocessVisionContent(body, settings, noLog, { vision: false });
+    assert.ok(result, "streaming vision response should be accepted");
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].stream, true);
+    assert.match(JSON.stringify(result.messages[0].content), /streamed vision text/);
   } finally {
     globalThis.fetch = originalFetch;
     clearVisionDescriptionCache();

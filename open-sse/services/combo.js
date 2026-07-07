@@ -9,6 +9,7 @@ import { getCapabilitiesForModel } from "../providers/capabilities.js";
 import { extractTextContent } from "../translator/formats/gemini.js";
 import { MODEL_FAILURE_BACKOFF_MAX_MS } from "../config/errorConfig.js";
 import { COMBO_REASONING_STREAM_FIRST_PRODUCTIVE_TIMEOUT_MS } from "../config/runtimeConfig.js";
+import { parseSSEToOpenAIResponse } from "../handlers/chatCore/sseToJsonHandler.js";
 
 // Hard capabilities = input modalities; missing one drops request data (e.g. image
 // stripped). Must be prioritized. Soft (e.g. search) only degrades a feature.
@@ -561,6 +562,7 @@ function extractPanelText(json) {
     const msg = choice.message ?? choice.delta ?? {};
     const t = extractTextContent(msg.content);
     if (t.trim()) return t;
+    if (typeof msg.reasoning_content === "string" && msg.reasoning_content.trim()) return msg.reasoning_content;
     if (typeof choice.text === "string" && choice.text.trim()) return choice.text;
   }
 
@@ -584,6 +586,15 @@ function extractPanelText(json) {
   }
 
   return "";
+}
+
+async function readPanelResponseJSON(res, model) {
+  const contentType = res.headers?.get?.("content-type") || "";
+  if (contentType.includes("text/event-stream")) {
+    const rawSSE = await res.clone().text();
+    return parseSSEToOpenAIResponse(rawSSE, model);
+  }
+  return res.clone().json();
 }
 
 /**
@@ -737,9 +748,11 @@ export async function handleFusionChat({ body, models, handleSingleModel, log, c
   const judge = judgeModel && judgeModel.trim() ? judgeModel.trim() : panel[0];
   log.info("FUSION", `Combo "${comboName}" | panel=${panel.length} [${panel.join(", ")}] | judge=${judge} | quorum=${minPanel}`);
 
-  // 1. Fan out to the panel in parallel: non-streaming, tools stripped (we want prose).
+  // 1. Fan out to the panel in parallel. Use streaming so heavy panel prompts
+  // produce bytes early instead of timing out as non-streaming requests. Panel
+  // responses are normalized back to JSON before extractPanelText below.
   const { tools, tool_choice, ...rest } = body;
-  const panelBody = { ...rest, stream: false };
+  const panelBody = { ...rest, stream: true };
 
   // Flatten tool turns to prose so panel models keep context without emitting tool_calls.
   if (Array.isArray(panelBody.messages)) {
@@ -773,7 +786,7 @@ export async function handleFusionChat({ body, models, handleSingleModel, log, c
     if (res.__error) { log.warn("FUSION", `Panel ${model} threw`, { error: res.__error?.message || String(res.__error) }); continue; }
     if (!res.ok) { log.warn("FUSION", `Panel ${model} failed`, { status: res.status }); continue; }
     try {
-      const json = await res.clone().json();
+      const json = await readPanelResponseJSON(res, model);
       const text = extractPanelText(json);
       if (text) {
         answers.push({ model, text, response: res });
