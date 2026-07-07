@@ -359,6 +359,20 @@ export async function resolveTargetCaps(modelStr, deps) {
   return { vision: true };
 }
 
+export async function resolveFirstComboMemberCaps(modelStr, deps) {
+  const { getModelInfo, getComboModels, getCapabilitiesForModel } = deps;
+  const members = await getComboModels(modelStr);
+  if (!members || members.length === 0) return null;
+  const firstInfo = await getModelInfo(members[0]);
+  if (!firstInfo?.provider) return null;
+  return getCapabilitiesForModel(firstInfo.provider, firstInfo.model);
+}
+
+export async function shouldDeferComboVisionPreprocessing(modelStr, deps) {
+  const caps = await resolveFirstComboMemberCaps(modelStr, deps);
+  return caps?.vision === true;
+}
+
 function stripImagesFromMessage(msg, placeholder) {
   if (!Array.isArray(msg.content)) return msg;
   const filtered = msg.content.filter(b => b?.type !== "image_url" && b?.type !== "image");
