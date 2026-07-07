@@ -4,7 +4,7 @@ import { createSSETransformStreamWithLogger, createPassthroughStreamWithLogger }
 import { pipeWithDisconnect } from "../../utils/streamHandler.js";
 import { parseSSELine } from "../../utils/streamHelpers.js";
 import { PROVIDERS } from "../../config/providers.js";
-import { HTTP_STATUS, PREFLIGHT_TICK_MS, PREFLIGHT_NO_BYTE_CAP_MS, PREFLIGHT_NO_CONTENT_CAP_MS } from "../../config/runtimeConfig.js";
+import { HTTP_STATUS, PREFLIGHT_TICK_MS, PREFLIGHT_NO_BYTE_CAP_MS, PREFLIGHT_NO_CONTENT_CAP_MS, PREFLIGHT_EARLY_KEEPALIVE } from "../../config/runtimeConfig.js";
 import { buildAbortedResponsesTerminalBytes } from "../../utils/responsesStreamHelpers.js";
 import { createErrorResult } from "../../utils/error.js";
 import { buildRequestDetail, extractRequestConfig, saveUsageStats } from "./requestDetail.js";
@@ -113,6 +113,25 @@ function replayBufferedBody(reader, bufferedChunks) {
   });
 }
 
+function replayBufferedBodyWithKeepAlive(reader, bufferedChunks, keepAliveChunks) {
+  return new ReadableStream({
+    start(controller) {
+      for (const chunk of keepAliveChunks) controller.enqueue(chunk);
+      for (const chunk of bufferedChunks) controller.enqueue(chunk);
+    },
+    async pull(controller) {
+      const { done, value } = await reader.read();
+      if (done) { controller.close(); return; }
+      controller.enqueue(value);
+    },
+    cancel(reason) { reader.cancel(reason).catch(() => {}); }
+  });
+}
+
+function createPreflightKeepAliveChunk() {
+  return new TextEncoder().encode(`: preflight keep-alive ${Date.now()}\n\n`);
+}
+
 async function readWithDeadline(reader, ms, reason) {
   let timer;
   try {
@@ -151,7 +170,7 @@ function wait(ms) {
   return new Promise(resolve => setTimeout(resolve, Math.max(0, ms || 0)));
 }
 
-export async function guardInitialStream(providerResponse, { targetFormat, log, provider, model, policy, routeInfo }) {
+export async function guardInitialStream(providerResponse, { targetFormat, log, provider, model, policy, routeInfo, stream = false }) {
   if (!providerResponse.body) return { response: providerResponse };
   const reader = providerResponse.body.getReader();
   const decoder = new TextDecoder("utf-8", { fatal: false });
@@ -180,6 +199,9 @@ export async function guardInitialStream(providerResponse, { targetFormat, log, 
   const firstProductiveTimeoutMs = policy?.firstProductiveTimeoutMs || PREFLIGHT_NO_CONTENT_CAP_MS;
   const totalBudgetMs = policy?.totalBudgetMs || 0;
   const bufferedChunks = [];
+  const keepAliveChunks = [];
+  const shouldEmitEarlyKeepAlive = stream && PREFLIGHT_EARLY_KEEPALIVE;
+  let emittedEarlyKeepAlive = false;
   let buffer = "";
   let hasByte = false;
   let lastByteTime = startTime;
@@ -224,7 +246,7 @@ export async function guardInitialStream(providerResponse, { targetFormat, log, 
 
       if (done) {
         if (foundProductive) {
-          const body = replayBufferedBody(reader, bufferedChunks);
+          const body = replayBufferedBodyWithKeepAlive(reader, bufferedChunks, keepAliveChunks);
           return { response: new Response(body, { status: providerResponse.status, statusText: providerResponse.statusText, headers: providerResponse.headers }) };
         }
         throw new Error("Empty upstream stream (terminal before productive)");
@@ -284,6 +306,14 @@ export async function guardInitialStream(providerResponse, { targetFormat, log, 
       if (foundSemantic || foundHeartbeat) {
         timing.lastNonProductiveAt = Date.now();
         lastByteTime = timing.lastNonProductiveAt;
+        if (shouldEmitEarlyKeepAlive && !emittedEarlyKeepAlive) {
+          timing.acceptedAt = Date.now();
+          keepAliveChunks.push(createPreflightKeepAliveChunk());
+          emittedEarlyKeepAlive = true;
+          logPreflight("info", "accepted", "reason=early_keepalive");
+          const body = replayBufferedBodyWithKeepAlive(reader, bufferedChunks, keepAliveChunks);
+          return { response: new Response(body, { status: providerResponse.status, statusText: providerResponse.statusText, headers: providerResponse.headers }) };
+        }
       }
 
       pendingRead = reader.read();
@@ -314,7 +344,7 @@ function buildTransformStream({ provider, sourceFormat, targetFormat, userAgent,
 }
 
 export async function handleStreamingResponse({ providerResponse, provider, model, sourceFormat, targetFormat, userAgent, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, reqLogger, toolNameMap, streamController, onStreamComplete, log, streamTimeoutPolicy, routeInfo, retryFn, emptyStreamRetryDelayMs = PREFLIGHT_TICK_MS }) {
-  let guarded = await guardInitialStream(providerResponse, { targetFormat, log, provider, model, policy: streamTimeoutPolicy, routeInfo });
+  let guarded = await guardInitialStream(providerResponse, { targetFormat, log, provider, model, policy: streamTimeoutPolicy, routeInfo, stream });
   if (guarded.error && retryFn && isRetryableEmptyStreamError(guarded.error)) {
     log?.warn?.("STREAM", `${provider?.toUpperCase?.() || provider} | ${model} | empty upstream stream, retrying after ${emptyStreamRetryDelayMs}ms`);
     await wait(emptyStreamRetryDelayMs);
@@ -322,7 +352,7 @@ export async function handleStreamingResponse({ providerResponse, provider, mode
       const retryResult = await retryFn();
       if (retryResult?.response) {
         providerResponse = retryResult.response;
-        guarded = await guardInitialStream(providerResponse, { targetFormat, log, provider, model, policy: streamTimeoutPolicy, routeInfo });
+        guarded = await guardInitialStream(providerResponse, { targetFormat, log, provider, model, policy: streamTimeoutPolicy, routeInfo, stream });
       }
     } catch (retryError) {
       log?.warn?.("STREAM", `${provider?.toUpperCase?.() || provider} | ${model} | empty upstream stream retry failed: ${retryError.message || retryError}`);

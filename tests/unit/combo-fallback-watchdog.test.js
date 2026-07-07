@@ -474,6 +474,46 @@ describe("productive stream watchdog", () => {
     });
     expect(res.error).toMatch(/productive timeout \(1s\)/);
   }, 10000);
+  it("emits preflight keepalive bytes when semantic event detected in stream mode", async () => {
+    const lines = [
+      `data: ${JSON.stringify({ type: "message_start", message: { id: "x" } })}\n\n`,
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "hi" } }] })}\n\n`,
+      "data: [DONE]\n\n",
+    ];
+    const res = await guardInitialStream(sseResponse(lines, false), {
+      targetFormat: null, log, provider: "p", model: "m",
+      policy: { firstByteTimeoutMs: 500, firstProductiveTimeoutMs: 500, totalBudgetMs: 20000 },
+      stream: true,
+    });
+    expect(res.error).toBeUndefined();
+    expect(res.response).toBeDefined();
+    const reader2 = res.response.body.getReader();
+    const { value: firstValue } = await reader2.read();
+    const firstText = new TextDecoder().decode(firstValue);
+    expect(firstText).toContain("preflight keep-alive");
+    reader2.releaseLock();
+  });
+
+  it("does not emit keepalive in non-stream mode even with semantic events", async () => {
+    const lines = [
+      `data: ${JSON.stringify({ type: "message_start", message: { id: "x" } })}\n\n`,
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "hi" } }] })}\n\n`,
+      "data: [DONE]\n\n",
+    ];
+    const res = await guardInitialStream(sseResponse(lines, false), {
+      targetFormat: null, log, provider: "p", model: "m",
+      policy: { firstByteTimeoutMs: 500, firstProductiveTimeoutMs: 500, totalBudgetMs: 20000 },
+      stream: false,
+    });
+    expect(res.error).toBeUndefined();
+    expect(res.response).toBeDefined();
+    const reader2 = res.response.body.getReader();
+    const { value: firstValue } = await reader2.read();
+    const firstText = new TextDecoder().decode(firstValue);
+    expect(firstText).not.toContain("preflight keep-alive");
+    reader2.releaseLock();
+  });
+
   it("direct default timeout is longer than combo default timeout", () => {
     expect(resolveRoutePolicy("direct").stream.firstProductiveTimeoutMs).toBeGreaterThan(resolveRoutePolicy("combo").stream.firstProductiveTimeoutMs);
   });
@@ -492,7 +532,25 @@ describe("productive stream watchdog", () => {
       },
     });
     expect(seen[0]).toBeGreaterThan(resolveRoutePolicy("combo").stream.firstProductiveTimeoutMs);
-    expect(seen[0]).toBe(45_000);
+    expect(seen[0]).toBe(25_000);
+  });
+
+  it("uses shorter cap for non-final reasoning fallback, wider for final", async () => {
+    const seen = [];
+    await handleComboChat({
+      body: { model: "combo", messages: [], reasoning_effort: "xhigh" },
+      models: ["sk/claude-opus-4.8-thinking", "sk/claude-haiku-4.8-thinking"],
+      comboName: "combo",
+      comboRetryAttempts: 0,
+      log: { info: () => {}, warn: () => {}, debug: () => {} },
+      handleSingleModel: async (_body, _model, ctx) => {
+        seen.push(ctx.streamTimeoutPolicy.firstProductiveTimeoutMs);
+        return new Response(JSON.stringify({ error: { message: "bad gateway" } }), { status: 502 });
+      },
+    });
+    expect(seen.length).toBe(2);
+    expect(seen[0]).toBe(resolveRoutePolicy("combo").stream.firstProductiveTimeoutMs);
+    expect(seen[1]).toBe(25_000);
   });
 });
 

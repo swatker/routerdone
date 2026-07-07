@@ -39,13 +39,19 @@ function isSlowReasoningAttempt(body, modelStr) {
   return ["high", "xhigh"].includes(effort) || /(?:thinking|reasoning|xhigh)/i.test(model);
 }
 
-function withModelStreamPolicy(baseStreamPolicy, body, modelStr) {
+function withModelStreamPolicy(baseStreamPolicy, body, modelStr, hasFallback = false) {
   if (!isSlowReasoningAttempt(body, modelStr)) return baseStreamPolicy;
+  // non-final attempts: tighten to shorter cap so dead reasoning models are abandoned quickly.
+  // final attempt: allow the full reasoning cap (25s default) for models that have no fallback.
+  const policyCap = hasFallback
+    ? baseStreamPolicy?.firstProductiveTimeoutMs
+    : COMBO_REASONING_STREAM_FIRST_PRODUCTIVE_TIMEOUT_MS;
+  if (policyCap == null) return baseStreamPolicy;
   return {
     ...baseStreamPolicy,
     firstProductiveTimeoutMs: Math.max(
       baseStreamPolicy?.firstProductiveTimeoutMs || 0,
-      COMBO_REASONING_STREAM_FIRST_PRODUCTIVE_TIMEOUT_MS,
+      policyCap,
     ),
   };
 }
@@ -426,7 +432,8 @@ export async function handleComboChat({ body, models, handleSingleModel, log, co
       break;
     }
     const modelStr = rotatedModels[i];
-    const modelStreamPolicy = withModelStreamPolicy(policy.stream, body, modelStr);
+    const hasFallback = i < rotatedModels.length - 1;
+    const modelStreamPolicy = withModelStreamPolicy(policy.stream, body, modelStr, hasFallback);
     summary.tried++;
     log.info("COMBO", `${comboLogPrefix} | Trying model ${i + 1}/${rotatedModels.length}: ${modelStr}`);
 
