@@ -23,7 +23,7 @@ import { dedupeTools } from "../utils/toolDeduper.js";
 import { injectCaveman } from "../rtk/caveman.js";
 import { injectPonytail } from "../rtk/ponytail.js";
 import { compressMessages, formatRtkLog } from "../rtk/index.js";
-import { guardContext, formatContextGuardLog, estimateInputTokens, pruneContextToHardCap, formatHardCapPruneLog } from "../rtk/contextGuard.js";
+import { guardContext, formatContextGuardLog, estimateInputTokens, pruneContextToHardCap, formatHardCapPruneLog, sanitizeTrimmedMediaBlocks } from "../rtk/contextGuard.js";
 import { compressWithHeadroom, formatHeadroomSizeLog, isHeadroomPhantomSavings } from "../rtk/headroom.js";
 import { getCapabilitiesForModel } from "../providers/capabilities.js";
 import { stripUnsupportedModalities } from "../translator/concerns/modality.js";
@@ -218,6 +218,15 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   }
   if (isHeadroomPhantomSavings(headroomStats, headroomDiagnostics)) {
     log?.warn?.("HEADROOM", "reported token delta, but outbound JSON shrank <5%; provider may bill near-original payload");
+  }
+
+  // Recovery for histories already pruned by older RouterDone builds. Those
+  // builds could trim inside image/audio data URLs, leaving invalid media blocks
+  // that upstream token counters reject (e.g. VietAPI count_token_failed).
+  const mediaSanitizeStats = sanitizeTrimmedMediaBlocks(translatedBody);
+  if (mediaSanitizeStats) {
+    const savedKB = Math.round(mediaSanitizeStats.savedBytes / 1024);
+    console.log(`[CTX-GUARD] sanitized ${mediaSanitizeStats.sanitizedMediaBlocks} trimmed media blocks (${savedKB}KB)`);
   }
 
   // Input size verification: estimate input tokens after all token savers.
