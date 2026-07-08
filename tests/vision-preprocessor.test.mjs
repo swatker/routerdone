@@ -7,8 +7,6 @@ import {
   hasImageContent,
   extractVisionText,
   resolveTargetCaps,
-  resolveFirstComboMemberCaps,
-  shouldDeferComboVisionPreprocessing,
   clearVisionDescriptionCache,
   getVisionDescriptionCacheStats,
 } from "../src/sse/services/visionPreprocessor.js";
@@ -157,26 +155,6 @@ test("resolveTargetCaps: empty combo returns null", async () => {
 
 test("resolveTargetCaps: unknown model returns null", async () => {
   assert.equal(await resolveTargetCaps("nope", mockDeps), null);
-});
-
-test("resolveFirstComboMemberCaps returns first member capability for mixed combo", async () => {
-  assert.deepEqual(await resolveFirstComboMemberCaps("high", mockDeps), { vision: false });
-});
-
-test("shouldDeferComboVisionPreprocessing is true when first combo member has vision", async () => {
-  const deps = {
-    ...mockDeps,
-    getComboModels: async (s) => s === "vision-first" ? ["oc/mimo-v2.5-free", "va/glm-5.2"] : null,
-  };
-  assert.equal(await shouldDeferComboVisionPreprocessing("vision-first", deps), true);
-});
-
-test("shouldDeferComboVisionPreprocessing is false when first combo member lacks vision", async () => {
-  const deps = {
-    ...mockDeps,
-    getComboModels: async (s) => s === "text-first" ? ["va/glm-5.2", "oc/mimo-v2.5-free"] : null,
-  };
-  assert.equal(await shouldDeferComboVisionPreprocessing("text-first", deps), false);
 });
 
 
