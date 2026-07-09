@@ -359,6 +359,38 @@ export async function resolveTargetCaps(modelStr, deps) {
   return { vision: true };
 }
 
+// Resolve capabilities for the first member of a combo. Used by the defer
+// path to decide whether to skip eager preprocessing (vision-first combo).
+// `deps`: { getModelInfo, getComboModels, getCapabilitiesForModel }
+export async function resolveFirstComboMemberCaps(modelStr, deps) {
+  const { getModelInfo, getComboModels, getCapabilitiesForModel } = deps;
+  const members = await getComboModels(modelStr);
+  if (!members || members.length === 0) return null;
+  const firstInfo = await getModelInfo(members[0]);
+  if (!firstInfo?.provider) return null;
+  return getCapabilitiesForModel(firstInfo.provider, firstInfo.model);
+}
+
+// Decide whether to defer vision preprocessing for a combo. Returns true when
+// AT LEAST ONE member is vision-capable — handleComboChat's auto-switch will
+// float a vision model to the front, so the happy path can feed the raw image
+// directly and only preprocess lazily if a non-vision fallback is actually
+// tried. Returns false for all-text combos (must eager-preprocess) and for
+// direct (non-combo) models (resolveTargetCaps handles those).
+export async function shouldDeferComboVisionPreprocessing(modelStr, deps) {
+  const { getModelInfo, getComboModels, getCapabilitiesForModel } = deps;
+  const members = await getComboModels(modelStr);
+  if (!members || members.length === 0) return false;
+  for (const m of members) {
+    const mInfo = await getModelInfo(m);
+    if (mInfo?.provider) {
+      const caps = getCapabilitiesForModel(mInfo.provider, mInfo.model);
+      if (caps?.vision === true) return true;
+    }
+  }
+  return false;
+}
+
 function stripImagesFromMessage(msg, placeholder) {
   if (!Array.isArray(msg.content)) return msg;
   const filtered = msg.content.filter(b => b?.type !== "image_url" && b?.type !== "image");

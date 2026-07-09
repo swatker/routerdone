@@ -17,7 +17,7 @@ import { handleComboChat, handleFusionChat } from "open-sse/services/combo.js";
 import { handleBypassRequest } from "open-sse/utils/bypassHandler.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
 import { resolveRoutePolicy } from "open-sse/services/routePolicy.js";
-import { preprocessVisionContent, hasImageContent, resolveTargetCaps } from "../services/visionPreprocessor.js";
+import { preprocessVisionContent, hasImageContent, resolveTargetCaps, shouldDeferComboVisionPreprocessing } from "../services/visionPreprocessor.js";
 import { getCapabilitiesForModel } from "open-sse/providers/capabilities.js";
 
 const MODEL_REDIRECTS = new Map([
@@ -159,25 +159,39 @@ export async function handleChat(request, clientRawRequest = null) {
     }
   }
 
+  // Resolve combo membership once before vision preprocessing so vision-first
+  // combos can feed the raw image to their first model and only preprocess
+  // lazily if a non-vision fallback is actually tried.
+  const comboModels = await getComboModels(modelStr);
+
   // Vision preprocessing: if body has images, preprocess through a vision model
-  // to convert image blocks to OCR text. This runs BEFORE combo dispatch so that
-  // the same text context is available to all models in the combo, and images are
-  // stripped before any model mutates the shared body object.
-  // Skip preprocessing when the target already supports vision — resolveTargetCaps
-  // sees through combo names too, so a combo whose every member is vision-capable
-  // reads the raw image once instead of being double-processed (and downgraded to
-  // a text description that then re-hits the same vision model).
+  // to convert image blocks to OCR text. For combos with at least one
+  // vision-capable member, defer this work — handleComboChat's auto-switch will
+  // float a vision model to the front so it reads the raw image directly, and
+  // non-vision fallbacks get a cloned+preprocessed body lazily. This avoids
+  // downgrading image quality (raw → OCR text → re-read by same vision model)
+  // and saves latency on the happy path.
+  let deferComboVisionPreprocessing = false;
   if (hasImageContent(body)) {
     try {
-      const targetCaps = await resolveTargetCaps(modelStr, {
+      deferComboVisionPreprocessing = !!comboModels && await shouldDeferComboVisionPreprocessing(modelStr, {
         getModelInfo,
         getComboModels,
         getCapabilitiesForModel,
       });
-      const preprocessed = await preprocessVisionContent(body, settings, log, targetCaps);
-      if (preprocessed) {
-        body = preprocessed;
-        log.info("VISION", "Images preprocessed for combo/direct model: " + modelStr);
+      if (deferComboVisionPreprocessing) {
+        log.info("VISION", "Deferring image preprocessing for vision-capable combo: " + modelStr);
+      } else {
+        const targetCaps = await resolveTargetCaps(modelStr, {
+          getModelInfo,
+          getComboModels,
+          getCapabilitiesForModel,
+        });
+        const preprocessed = await preprocessVisionContent(body, settings, log, targetCaps);
+        if (preprocessed) {
+          body = preprocessed;
+          log.info("VISION", "Images preprocessed for combo/direct model: " + modelStr);
+        }
       }
     } catch (e) {
       log.warn("VISION", "Preprocessing error: " + e.message + " (non-fatal)");
@@ -185,7 +199,6 @@ export async function handleChat(request, clientRawRequest = null) {
   }
 
   // Check if model is a combo (has multiple models with fallback)
-  const comboModels = await getComboModels(modelStr);
   if (comboModels) {
     // Check for combo-specific strategy first, fallback to global
     const comboStrategies = settings.comboStrategies || {};
@@ -225,7 +238,31 @@ export async function handleChat(request, clientRawRequest = null) {
     return handleComboChat({
       body,
       models: comboModels,
-      handleSingleModel: (b, m, attemptContext) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, attemptContext),
+      handleSingleModel: async (b, m, attemptContext) => {
+        let attemptBody = b;
+        // Lazy vision preprocessing: only when deferred AND this attempt's
+        // model lacks vision. Clone before preprocessing so the shared body
+        // keeps raw images for vision-capable members (no mutation leak).
+        if (deferComboVisionPreprocessing && hasImageContent(b)) {
+          try {
+            const attemptInfo = await getModelInfo(m);
+            const attemptCaps = attemptInfo?.provider
+              ? getCapabilitiesForModel(attemptInfo.provider, attemptInfo.model)
+              : null;
+            if (attemptCaps?.vision !== true) {
+              attemptBody = structuredClone(b);
+              const preprocessed = await preprocessVisionContent(attemptBody, settings, log, attemptCaps);
+              if (preprocessed) {
+                attemptBody = preprocessed;
+                log.info("VISION", "Images lazily preprocessed for combo fallback model: " + m);
+              }
+            }
+          } catch (e) {
+            log.warn("VISION", "Lazy preprocessing error: " + e.message + " (non-fatal)");
+          }
+        }
+        return handleSingleModelChat(attemptBody, m, clientRawRequest, request, apiKey, attemptContext);
+      },
       log,
       comboName: modelStr,
       comboStrategy,

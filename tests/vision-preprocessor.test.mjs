@@ -7,6 +7,8 @@ import {
   hasImageContent,
   extractVisionText,
   resolveTargetCaps,
+  resolveFirstComboMemberCaps,
+  shouldDeferComboVisionPreprocessing,
   clearVisionDescriptionCache,
   getVisionDescriptionCacheStats,
 } from "../src/sse/services/visionPreprocessor.js";
@@ -155,6 +157,101 @@ test("resolveTargetCaps: empty combo returns null", async () => {
 
 test("resolveTargetCaps: unknown model returns null", async () => {
   assert.equal(await resolveTargetCaps("nope", mockDeps), null);
+});
+
+
+// ── Vision-first combo defer: shouldDeferComboVisionPreprocessing ───────────
+// A mixed combo (vision + text members) should defer eager preprocessing so
+// the vision model reads the raw image; non-vision fallbacks preprocess lazily.
+// This fixes the regression where grok-4.5 (vision) received OCR text instead
+// of the original image because resolveTargetCaps returned null for mixed combos.
+
+const mockDepsDefer = {
+  getModelInfo: async (s) => {
+    if (s === "va/grok-4.5") return { provider: "va", model: "grok-4.5" };
+    if (s === "va/glm-5.2") return { provider: "va", model: "glm-5.2" };
+    if (s === "va/gpt-5.5-high") return { provider: "va", model: "gpt-5.5-high" };
+    if (s === "oc/mimo-v2.5-free") return { provider: "opencode", model: "mimo-v2.5-free" };
+    return { provider: null };
+  },
+  getComboModels: async (s) => {
+    // zcode = mixed vision+text (like production)
+    if (s === "zcode") return ["va/grok-4.5", "va/glm-5.2", "va/gpt-5.5-high"];
+    // all-text combo
+    if (s === "textonly") return ["va/glm-5.2"];
+    // all-vision combo
+    if (s === "allvision") return ["va/grok-4.5", "oc/mimo-v2.5-free"];
+    // empty
+    if (s === "empty") return [];
+    return null;
+  },
+  getCapabilitiesForModel: (provider, model) => {
+    // grok-4.5 and gpt-5.5-high have vision; glm-5.2 does not
+    if (model === "grok-4.5") return { vision: true, contextWindow: 256000 };
+    if (model === "gpt-5.5-high") return { vision: true, contextWindow: 400000 };
+    if (model === "mimo-v2.5-free") return { vision: true, contextWindow: 1048576 };
+    if (model === "glm-5.2") return { vision: false, contextWindow: 200000 };
+    return { vision: false };
+  },
+};
+
+test("shouldDefer: true when any combo member has vision (mixed combo)", async () => {
+  // zcode = [grok-4.5✓, glm-5.2✗, gpt-5.5-high✓] → defer because auto-switch
+  // will float grok-4.5 to front and it can read the raw image
+  assert.equal(await shouldDeferComboVisionPreprocessing("zcode", mockDepsDefer), true);
+});
+
+test("shouldDefer: false when all combo members are text-only", async () => {
+  // textonly = [glm-5.2✗] → no vision member → must eager-preprocess
+  assert.equal(await shouldDeferComboVisionPreprocessing("textonly", mockDepsDefer), false);
+});
+
+test("shouldDefer: false for direct (non-combo) model", async () => {
+  // Direct model — getComboModels returns null → not a combo → false
+  assert.equal(await shouldDeferComboVisionPreprocessing("va/grok-4.5", mockDepsDefer), false);
+});
+
+test("shouldDefer: false for empty combo", async () => {
+  assert.equal(await shouldDeferComboVisionPreprocessing("empty", mockDepsDefer), false);
+});
+
+test("shouldDefer: true for all-vision combo", async () => {
+  // all-vision combo also defers — no fallback would need OCR, but defer is
+  // still correct (vision models read raw image)
+  assert.equal(await shouldDeferComboVisionPreprocessing("allvision", mockDepsDefer), true);
+});
+
+test("resolveFirstComboMemberCaps: returns caps for first combo member", async () => {
+  const caps = await resolveFirstComboMemberCaps("zcode", mockDepsDefer);
+  assert.equal(caps?.vision, true); // first member = grok-4.5
+  assert.equal(caps?.contextWindow, 256000);
+});
+
+test("resolveFirstComboMemberCaps: returns null for non-combo", async () => {
+  assert.equal(await resolveFirstComboMemberCaps("va/grok-4.5", mockDepsDefer), null);
+});
+
+// ── Clone safety: lazy preprocess must not mutate the original body ─────────
+// When a non-vision fallback preprocesses a cloned body, the original body
+// must still contain the raw image blocks for vision models that may be tried
+// later in the same combo run.
+
+test("structuredClone preserves original body images when preprocess mutates clone", () => {
+  const original = {
+    messages: [
+      { role: "user", content: [{ type: "image_url", image_url: { url: FAKE_IMG } }, { type: "text", text: "describe this" }] },
+    ],
+  };
+  const clone = structuredClone(original);
+  // Simulate preprocess: replace image with text in clone
+  clone.messages[0].content = [{ type: "text", text: "[Image description: a red square]" }];
+
+  // Original must be untouched
+  assert.equal(original.messages[0].content[0].type, "image_url");
+  assert.equal(original.messages[0].content[0].image_url.url, FAKE_IMG);
+  // Clone has the replacement
+  assert.equal(clone.messages[0].content[0].type, "text");
+  assert.ok(clone.messages[0].content[0].text.includes("[Image description:"));
 });
 
 
