@@ -32,6 +32,56 @@ import { prefetchRemoteImages } from "../translator/concerns/prefetch.js";
 const DEFAULT_CONTEXT_GUARD_SOFT_TOKENS = Math.max(1, Number(process.env.CONTEXT_GUARD_SOFT_TOKENS) || 60000);
 const DEFAULT_CONTEXT_GUARD_KEEP_RECENT = Math.max(1, Number(process.env.CONTEXT_GUARD_KEEP_RECENT) || 3);
 
+// Combo/fusion abort if upstream hasn't returned response headers within this
+// window. Heavy agent payloads (200+ msgs, 100k+ tokens, large tool schemas)
+// need longer prefill than the default 12s, so we scale by conversation size.
+// Cap keeps one hung model from eating the whole combo budget.
+const HEADERS_DEADLINE_MAX_MS = 60_000;
+
+/**
+ * Count turns across OpenAI/Claude (`messages`), Responses (`input`), and
+ * Gemini (`contents`) shapes. Tools are not counted — they inflate body size
+ * but the dominant prefill cost is conversation history.
+ */
+export function countRequestTurns(body) {
+  if (!body || typeof body !== "object") return 0;
+  if (Array.isArray(body.messages)) return body.messages.length;
+  if (Array.isArray(body.input)) return body.input.length;
+  if (Array.isArray(body.contents)) return body.contents.length;
+  return 0;
+}
+
+/**
+ * Scale factor for combo/fusion headers deadline based on conversation length.
+ * Light requests keep the fast-fail default; heavy agent sessions get more
+ * prefill time so we don't 502 a live-but-slow upstream.
+ *
+ *   <50 msgs     → 1.0  (default ~12s)
+ *   50–99 msgs   → 1.5  (~18s)
+ *   100–199 msgs → 2.0  (~24s)
+ *   ≥200 msgs    → 2.5  (~30s)
+ */
+export function headersDeadlineScale(turnCount) {
+  const n = Number(turnCount) || 0;
+  if (n >= 200) return 2.5;
+  if (n >= 100) return 2.0;
+  if (n >= 50) return 1.5;
+  return 1.0;
+}
+
+/**
+ * Compute the combo/fusion headers abort deadline. Direct routes return null
+ * (no hard headers cut — they use stream idle/total budgets instead).
+ */
+export function computeHeadersDeadlineMs(routeMode, streamPolicy, body) {
+  if (routeMode === "direct") return null;
+  const base =
+    (streamPolicy?.firstByteTimeoutMs || 3000) +
+    (streamPolicy?.firstProductiveTimeoutMs || 8000);
+  const scale = headersDeadlineScale(countRequestTurns(body));
+  return Math.min(Math.round(base * scale), HEADERS_DEADLINE_MAX_MS);
+}
+
 /**
  * Core chat handler - shared between SSE and Worker
  * @param {object} options.body - Request body
@@ -44,9 +94,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   const requestStartTime = Date.now();
   const routeMode = routeInfo?.routeMode || (routeInfo?.comboName ? "combo" : "direct");
   const resolvedStreamPolicy = resolveRoutePolicy(routeMode, { stream: streamTimeoutPolicy, streamPreflightTimeoutMs }).stream;
-  const headersDeadlineMs = routeMode === "direct"
-    ? null
-    : (resolvedStreamPolicy.firstByteTimeoutMs || 3000) + (resolvedStreamPolicy.firstProductiveTimeoutMs || 8000);
+  const headersDeadlineMs = computeHeadersDeadlineMs(routeMode, resolvedStreamPolicy, body);
 
   const sourceFormat = sourceFormatOverride || detectFormat(body);
 

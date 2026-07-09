@@ -6,6 +6,7 @@ import { guardInitialStream, handleStreamingResponse, isProductiveStreamChunk, i
 import { resolveRoutePolicy } from "../../open-sse/services/routePolicy.js";
 import { isBusyConcurrencyError, shouldLockConnectionForError, resolveConnectionCooldownMs } from "../../open-sse/services/accountFallback.js";
 
+import { countRequestTurns, headersDeadlineScale, computeHeadersDeadlineMs } from "../../open-sse/handlers/chatCore.js";
 describe("adaptive combo fallback", () => {
   beforeEach(() => { resetComboRotation(); resetComboCooldowns(); });
 
@@ -554,6 +555,43 @@ describe("productive stream watchdog", () => {
   });
 });
 
+
+describe("payload-scaled headers deadline", () => {
+  const comboStream = resolveRoutePolicy("combo").stream;
+  const baseDeadline =
+    (comboStream.firstByteTimeoutMs || 3000) +
+    (comboStream.firstProductiveTimeoutMs || 8000);
+
+  it("counts turns from messages / input / contents shapes", () => {
+    expect(countRequestTurns({ messages: new Array(20).fill({}) })).toBe(20);
+    expect(countRequestTurns({ input: new Array(7).fill({}) })).toBe(7);
+    expect(countRequestTurns({ contents: new Array(3).fill({}) })).toBe(3);
+    expect(countRequestTurns({})).toBe(0);
+    expect(countRequestTurns(null)).toBe(0);
+  });
+
+  it("light payload (<50 msgs) keeps default 1.0 scale / ~12s deadline", () => {
+    const light = { messages: new Array(20).fill({ role: "user", content: "hi" }) };
+    expect(headersDeadlineScale(20)).toBe(1.0);
+    expect(computeHeadersDeadlineMs("combo", comboStream, light)).toBe(baseDeadline);
+    expect(computeHeadersDeadlineMs("direct", comboStream, light)).toBeNull();
+  });
+
+  it("heavy payload (200+ msgs) scales deadline above 24s", () => {
+    const heavy = { messages: new Array(239).fill({ role: "user", content: "x" }) };
+    expect(headersDeadlineScale(239)).toBe(2.5);
+    const deadline = computeHeadersDeadlineMs("combo", comboStream, heavy);
+    expect(deadline).toBe(Math.round(baseDeadline * 2.5));
+    expect(deadline).toBeGreaterThan(24_000);
+    expect(deadline).toBeLessThanOrEqual(60_000);
+  });
+
+  it("mid-size payload (100-199 msgs) uses 2.0 scale", () => {
+    const mid = { messages: new Array(150).fill({ role: "user", content: "x" }) };
+    expect(headersDeadlineScale(150)).toBe(2.0);
+    expect(computeHeadersDeadlineMs("combo", comboStream, mid)).toBe(Math.round(baseDeadline * 2.0));
+  });
+});
 describe("retry-after parsing", () => {
   it("parses Retry-After header and reset-after text", () => {
     const h = new Headers({ "Retry-After": "7" });
