@@ -3,7 +3,7 @@ import { createErrorResult } from "../../utils/error.js";
 import { HTTP_STATUS } from "../../config/runtimeConfig.js";
 import { FORMATS } from "../../translator/formats.js";
 import { PROVIDERS } from "../../config/providers.js";
-import { buildRequestDetail, extractRequestConfig, saveUsageStats } from "./requestDetail.js";
+import { buildRequestDetail, extractRequestConfig, logChatRequestComplete, saveUsageStats } from "./requestDetail.js";
 
 // Responses-API providers (e.g. codex) may emit SSE without content-type + use Responses output shape
 const isResponsesProvider = (p) => PROVIDERS[p]?.format === FORMATS.OPENAI_RESPONSES;
@@ -148,11 +148,14 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, pr
 
       const { msgItem, textContent } = pickAssistantMessageForChatCompletion(jsonResponse.output);
       const totalLatency = Date.now() - requestStartTime;
+      const latency = { ttft: totalLatency, total: totalLatency };
+      const normalizedUsage = { prompt_tokens: usage.input_tokens || 0, completion_tokens: usage.output_tokens || 0 };
+      logChatRequestComplete({ status: providerResponse.status, stream: false, provider, model, latency, tokens: normalizedUsage });
 
       saveRequestDetail(buildRequestDetail({
         ...ctx,
-        latency: { ttft: totalLatency, total: totalLatency },
-        tokens: { prompt_tokens: usage.input_tokens || 0, completion_tokens: usage.output_tokens || 0 },
+        latency,
+        tokens: normalizedUsage,
         response: { content: textContent, thinking: null, finish_reason: jsonResponse.status || "unknown" },
         status: "success"
       }, { endpoint: clientRawRequest?.endpoint || null })).catch(() => {});
@@ -224,9 +227,11 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, pr
     saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, endpoint: clientRawRequest?.endpoint, routeInfo });
 
     const totalLatency = Date.now() - requestStartTime;
+    const latency = { ttft: totalLatency, total: totalLatency };
+    logChatRequestComplete({ status: providerResponse.status, stream: false, provider, model, latency, tokens: usage });
     saveRequestDetail(buildRequestDetail({
       ...ctx,
-      latency: { ttft: totalLatency, total: totalLatency },
+      latency,
       tokens: usage,
       response: {
         content: parsed.choices?.[0]?.message?.content || null,

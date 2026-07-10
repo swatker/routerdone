@@ -1,4 +1,5 @@
 import { saveRequestUsage, appendRequestLog, saveRequestDetail } from "@/lib/usageDb.js";
+import { appendRequestConsoleLog } from "@/lib/consoleLogBuffer.js";
 import { COLORS } from "../../utils/stream.js";
 
 const OPTIONAL_PARAMS = [
@@ -75,6 +76,18 @@ export function buildRequestDetail(base, overrides = {}) {
     status: base.status || "success",
     ...overrides
   };
+}
+
+export function logChatRequestComplete({ status = 200, stream = false, provider, model, latency, tokens }) {
+  appendRequestConsoleLog({
+    status,
+    stream,
+    provider,
+    model,
+    duration: latency?.total || 0,
+    ttft: latency?.ttft || 0,
+    tokens: tokens || {},
+  });
 }
 
 export function saveUsageStats({ provider, model, tokens, connectionId, apiKey, endpoint, label = "USAGE", routeInfo = null }) {
