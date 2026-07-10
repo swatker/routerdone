@@ -7,7 +7,7 @@ import { parseResetAfterText, parseRetryAfterHeader, unavailableResponse } from 
 import { isImmediateFallbackStatus, isRetryableTransientStatus, resolveRoutePolicy } from "./routePolicy.js";
 import { getCapabilitiesForModel } from "../providers/capabilities.js";
 import { extractTextContent } from "../translator/formats/gemini.js";
-import { MODEL_FAILURE_BACKOFF_MAX_MS } from "../config/errorConfig.js";
+import { MODEL_FAILURE_BACKOFF_MAX_MS, PROVIDER_SELF_HEAL_COOLDOWN_MS } from "../config/errorConfig.js";
 import { COMBO_REASONING_STREAM_FIRST_PRODUCTIVE_TIMEOUT_MS } from "../config/runtimeConfig.js";
 import { parseSSEToOpenAIResponse } from "../handlers/chatCore/sseToJsonHandler.js";
 
@@ -95,6 +95,21 @@ function markComboCooldown(modelStr) {
   const backoffMs = Math.min(baseMs * Math.pow(2, nextCount - 1), MODEL_FAILURE_BACKOFF_MAX_MS);
   const until = now + backoffMs;
   comboModelCooldowns.set(modelStr, until);
+  return until;
+}
+
+// Short fixed cooldown for self-heal errors (empty stream, headers timeout,
+// provider-surface issues). Unlike markComboCooldown, this does NOT bump the
+// exponential failure counter — the provider is expected to recover quickly
+// and should not be deprioritized for long. Pattern borrowed from OmniRoute's
+// comboCooldownRetry classification: transient errors get a short window,
+// permanent errors get exponential backoff.
+function markComboSelfHealCooldown(modelStr) {
+  const now = Date.now();
+  const until = now + PROVIDER_SELF_HEAL_COOLDOWN_MS;
+  comboModelCooldowns.set(modelStr, until);
+  // Do NOT touch comboModelFailures — counter stays at current value so the
+  // next real failure still starts fresh at the base window.
   return until;
 }
 
@@ -498,7 +513,7 @@ export async function handleComboChat({ body, models, handleSingleModel, log, co
       }
 
       // Check if should fallback to next model
-      const { shouldFallback, cooldownMs } = checkFallbackError(result.status, errorText);
+      const { shouldFallback, cooldownMs, selfHeal } = checkFallbackError(result.status, errorText);
 
       if (!shouldFallback) {
         summary.failed++;
@@ -509,10 +524,14 @@ export async function handleComboChat({ body, models, handleSingleModel, log, co
 
       const cooldownReason = isAuthLockedComboError(errorBody)
         ? "auth_model_locked"
-        : isPreflightTimeoutText(errorText)
-          ? "preflight_timeout"
-          : "fallback_error";
-      const cooldownUntil = markComboCooldown(modelStr);
+        : selfHeal
+          ? "self_heal"
+          : isPreflightTimeoutText(errorText)
+            ? "preflight_timeout"
+            : "fallback_error";
+      const cooldownUntil = selfHeal
+        ? markComboSelfHealCooldown(modelStr)
+        : markComboCooldown(modelStr);
       if (cooldownUntil) {
         log.warn("COMBO", `${comboLogPrefix} | cooldown model=${modelStr} until=${formatConsoleTimeGmt7(cooldownUntil)} reason=${cooldownReason}`, { status: result.status, cooldownMs });
       }
