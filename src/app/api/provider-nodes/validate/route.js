@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { assertPublicUrl } from "@/shared/utils/ssrfGuard.js";
 import { isLocalRequest } from "@/dashboardGuard";
-import { buildClineHeaders, getClineAccessToken } from "@/shared/utils/clineAuth";
+import { buildProviderEndpoint, normalizeProviderBaseUrl, normalizeRuntimeProfile } from "@/lib/providerTransport";
 
 // Fetch with timeout wrapper
 const fetchWithTimeout = (url, options, timeout = 10000) => {
@@ -22,16 +22,6 @@ const isValidUrl = (url) => {
     return false;
   }
 };
-
-// Detect Cline base URL for special auth handling
-function isClineBaseUrl(url) {
-  try {
-    const hostname = new URL(url).hostname.toLowerCase();
-    return hostname === "api.cline.bot" || hostname.endsWith(".cline.bot");
-}
-catch { return false; }
-}
-
 
 // Parse error details for user-friendly messages
 const getErrorMessage = (error) => {
@@ -67,20 +57,23 @@ export async function POST(request) {
   try {
     const body = await request.json();
     const { baseUrl, apiKey, type, modelId } = body;
+    const runtimeProfile = normalizeRuntimeProfile(body.runtimeProfile);
 
     if (!baseUrl || !apiKey) {
       return NextResponse.json({ error: "Base URL and API key required" }, { status: 400 });
     }
 
-    // Validate URL format
-    if (!isValidUrl(baseUrl)) {
-      return NextResponse.json({ error: "Invalid URL format" }, { status: 400 });
+    let normalizedBase;
+    try {
+      normalizedBase = normalizeProviderBaseUrl(baseUrl, { runtimeProfile, transport: type === "anthropic-compatible" ? "anthropic" : "openai" });
+    } catch (error) {
+      return NextResponse.json({ error: error.message || "Invalid URL format" }, { status: 400 });
     }
 
-    // SSRF guard for remote callers; local host keeps self-hosted nodes (e.g. ollama-local)
+    // SSRF guard for remote callers; local host keeps explicit self-hosted profiles (e.g. lmstudio_local)
     if (!isLocalRequest(request)) {
       try {
-        assertPublicUrl(baseUrl);
+        assertPublicUrl(normalizedBase);
       } catch {
         return NextResponse.json({ error: "URL not allowed" }, { status: 400 });
       }
@@ -88,11 +81,10 @@ export async function POST(request) {
 
     // Custom Embedding Validation - test POST /embeddings directly
     if (type === "custom-embedding") {
-      const normalizedBase = baseUrl.trim().replace(/\/$/, "");
       if (!modelId?.trim()) {
         return NextResponse.json({ valid: false, error: "Model ID required for embedding validation" });
       }
-      const embedRes = await fetchWithTimeout(`${normalizedBase}/embeddings`, {
+      const embedRes = await fetchWithTimeout(buildProviderEndpoint(normalizedBase, "/embeddings", { runtimeProfile }), {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${apiKey}`,
@@ -118,12 +110,7 @@ export async function POST(request) {
 
     // Anthropic Compatible Validation
     if (type === "anthropic-compatible") {
-      let normalizedBase = baseUrl.trim().replace(/\/$/, "");
-      if (normalizedBase.endsWith("/messages")) {
-        normalizedBase = normalizedBase.slice(0, -9);
-      }
-
-      const modelsUrl = `${normalizedBase}/models`;
+      const modelsUrl = buildProviderEndpoint(normalizedBase, "/models", { transport: "anthropic" });
       const res = await fetchWithTimeout(modelsUrl, {
         method: "GET",
         headers: {
@@ -135,16 +122,14 @@ export async function POST(request) {
 
       if (res.ok) return NextResponse.json({ valid: true });
 
-      // Auth errors on /models — try chat fallback if modelId provided
-      // (Some providers like Cline return 401 on /models due to header format,
-      //  but accept the same key on /chat/completions)
-      if ((res.status === 401 || res.status === 403) && !modelId && !isCline) {
+      // Auth errors - no point trying chat fallback
+      if (res.status === 401 || res.status === 403) {
         return NextResponse.json({ valid: false, error: "API key unauthorized" });
       }
 
       // Fallback: try chat/completions if modelId provided
       if (modelId) {
-        const chatRes = await fetchWithTimeout(`${normalizedBase}/chat/completions`, {
+        const chatRes = await fetchWithTimeout(buildProviderEndpoint(normalizedBase, "/chat/completions", { transport: "anthropic" }), {
           method: "POST",
           headers: {
             "Authorization": `Bearer ${apiKey}`,
@@ -172,52 +157,26 @@ export async function POST(request) {
     }
 
     // OpenAI Compatible Validation (Default)
-    const normalizedBase = baseUrl.replace(/\/$/, "");
-    const isCline = isClineBaseUrl(baseUrl);
-    // Cline: detect OAuth token (workos: prefix) vs REST API key (sk_*)
-    // REST keys use raw Bearer; OAuth tokens need workos: prefix + special headers
-    const isClineOAuth = isCline && apiKey?.trim().startsWith("workos:");
-
-    if (isCline) {
-      // Cline has no /models endpoint — go straight to chat completions
-      const headers = isClineOAuth
-        ? { ...buildClineHeaders(getClineAccessToken(apiKey)), "Content-Type": "application/json" }
-        : { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" };
-      const chatRes = await fetchWithTimeout(`${normalizedBase}/chat/completions`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          model: "anthropic/claude-sonnet-4.6",
-          messages: [{ role: "user", content: "ping" }],
-          max_tokens: 1
-        })
-      });
-      // 401/403 = bad key; anything else (500, 400, 404) = auth passed
-      if (chatRes.status === 401 || chatRes.status === 403) {
-        return NextResponse.json({ valid: false, error: "API key unauthorized" });
-      }
-      return NextResponse.json({ valid: true, method: "chat" });
-    }
-
-    // Standard OpenAI-compatible: try /models first
-    const modelsUrl = `${normalizedBase}/models`;
+    const modelsUrl = buildProviderEndpoint(normalizedBase, "/models", { runtimeProfile });
     const res = await fetchWithTimeout(modelsUrl, {
       headers: { "Authorization": `Bearer ${apiKey}` },
     });
 
     if (res.ok) return NextResponse.json({ valid: true });
 
-    // Auth errors on /models — try chat fallback if modelId provided
-    // (Some providers return 401 on /models but accept key on /chat/completions)
-    if ((res.status === 401 || res.status === 403) && !modelId) {
+    // Auth errors - no point trying chat fallback
+    if (res.status === 401 || res.status === 403) {
       return NextResponse.json({ valid: false, error: "API key unauthorized" });
     }
 
-    // Fallback: try chat/completions with modelId
+    // Fallback: try chat/completions if modelId provided
     if (modelId) {
-      const chatRes = await fetchWithTimeout(`${normalizedBase}/chat/completions`, {
+      const chatRes = await fetchWithTimeout(buildProviderEndpoint(normalizedBase, "/chat/completions", { runtimeProfile }), {
         method: "POST",
-        headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
+        headers: {
+          "Authorization": `Bearer ${apiKey}`,
+          "Content-Type": "application/json"
+        },
         body: JSON.stringify({
           model: modelId,
           messages: [{ role: "user", content: "ping" }],

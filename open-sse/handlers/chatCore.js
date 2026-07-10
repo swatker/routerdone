@@ -1,4 +1,5 @@
 import { detectFormat, getTargetFormat, resolveTransport } from "../services/provider.js";
+import { normalizeLmstudioMessages } from "../services/runtimeProfile.js";
 import { translateRequest } from "../translator/index.js";
 import { FORMATS } from "../translator/formats.js";
 import { normalizeClaudePassthrough } from "../translator/formats/claude.js";
@@ -32,56 +33,6 @@ import { prefetchRemoteImages } from "../translator/concerns/prefetch.js";
 const DEFAULT_CONTEXT_GUARD_SOFT_TOKENS = Math.max(1, Number(process.env.CONTEXT_GUARD_SOFT_TOKENS) || 60000);
 const DEFAULT_CONTEXT_GUARD_KEEP_RECENT = Math.max(1, Number(process.env.CONTEXT_GUARD_KEEP_RECENT) || 3);
 
-// Combo/fusion abort if upstream hasn't returned response headers within this
-// window. Heavy agent payloads (200+ msgs, 100k+ tokens, large tool schemas)
-// need longer prefill than the default 12s, so we scale by conversation size.
-// Cap keeps one hung model from eating the whole combo budget.
-const HEADERS_DEADLINE_MAX_MS = 60_000;
-
-/**
- * Count turns across OpenAI/Claude (`messages`), Responses (`input`), and
- * Gemini (`contents`) shapes. Tools are not counted — they inflate body size
- * but the dominant prefill cost is conversation history.
- */
-export function countRequestTurns(body) {
-  if (!body || typeof body !== "object") return 0;
-  if (Array.isArray(body.messages)) return body.messages.length;
-  if (Array.isArray(body.input)) return body.input.length;
-  if (Array.isArray(body.contents)) return body.contents.length;
-  return 0;
-}
-
-/**
- * Scale factor for combo/fusion headers deadline based on conversation length.
- * Light requests keep the fast-fail default; heavy agent sessions get more
- * prefill time so we don't 502 a live-but-slow upstream.
- *
- *   <50 msgs     → 1.0  (default ~12s)
- *   50–99 msgs   → 1.5  (~18s)
- *   100–199 msgs → 2.0  (~24s)
- *   ≥200 msgs    → 2.5  (~30s)
- */
-export function headersDeadlineScale(turnCount) {
-  const n = Number(turnCount) || 0;
-  if (n >= 200) return 2.5;
-  if (n >= 100) return 2.0;
-  if (n >= 50) return 1.5;
-  return 1.0;
-}
-
-/**
- * Compute the combo/fusion headers abort deadline. Direct routes return null
- * (no hard headers cut — they use stream idle/total budgets instead).
- */
-export function computeHeadersDeadlineMs(routeMode, streamPolicy, body) {
-  if (routeMode === "direct") return null;
-  const base =
-    (streamPolicy?.firstByteTimeoutMs || 3000) +
-    (streamPolicy?.firstProductiveTimeoutMs || 8000);
-  const scale = headersDeadlineScale(countRequestTurns(body));
-  return Math.min(Math.round(base * scale), HEADERS_DEADLINE_MAX_MS);
-}
-
 /**
  * Core chat handler - shared between SSE and Worker
  * @param {object} options.body - Request body
@@ -93,9 +44,12 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   const { provider, model } = modelInfo;
   const requestStartTime = Date.now();
   const routeMode = routeInfo?.routeMode || (routeInfo?.comboName ? "combo" : "direct");
-  const resolvedStreamPolicy = resolveRoutePolicy(routeMode, { stream: streamTimeoutPolicy, streamPreflightTimeoutMs }).stream;
-  const headersDeadlineMs = computeHeadersDeadlineMs(routeMode, resolvedStreamPolicy, body);
+  const resolvedStreamPolicy = resolveRoutePolicy(routeMode, { stream: streamTimeoutPolicy, streamPreflightTimeoutMs, providerSpecificData: credentials?.providerSpecificData }).stream;
+  const headersDeadlineMs = routeMode === "direct"
+    ? null
+    : (resolvedStreamPolicy.firstByteTimeoutMs || 3000) + (resolvedStreamPolicy.firstProductiveTimeoutMs || 8000);
 
+  body = normalizeLmstudioMessages(body, credentials?.providerSpecificData);
   const sourceFormat = sourceFormatOverride || detectFormat(body);
 
   // Check for bypass patterns (warmup, skip, cc naming)
@@ -166,17 +120,20 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   // Expose raw client headers to translators/executors for session-id resolution
   if (credentials) credentials.rawHeaders = clientRawRequest?.headers || {};
 
-  // Auto-strip media blocks the model can't read (vision/audio/pdf) before translation.
-  if (!passthrough) {
+  // Validate/strip media before dispatch, including native passthrough. Translation
+  // may be skipped, but malformed client media must never bypass the boundary.
+  {
     const caps = getCapabilitiesForModel(provider, model);
     if (stripUnsupportedModalities(body, sourceFormat, caps)) {
       log?.debug?.("MODALITY", `stripped unsupported media for ${provider}/${model}`);
     }
-    // Convert remote image URLs to base64 for targets that can't fetch URLs.
-    try {
-      const n = await prefetchRemoteImages(body, sourceFormat, targetFormat, { signal: undefined });
-      if (n > 0) log?.debug?.("MODALITY", `prefetched ${n} remote image(s) for ${targetFormat}`);
-    } catch (e) { log?.warn?.("MODALITY", `image prefetch failed: ${e.message}`); }
+    // Remote prefetch remains disabled for native passthrough to preserve native semantics.
+    if (!passthrough) {
+      try {
+        const n = await prefetchRemoteImages(body, sourceFormat, targetFormat, { signal: undefined });
+        if (n > 0) log?.debug?.("MODALITY", `prefetched ${n} remote image(s) for ${targetFormat}`);
+      } catch (e) { log?.warn?.("MODALITY", `image prefetch failed: ${e.message}`); }
+    }
   }
 
   let translatedBody;
@@ -200,15 +157,6 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     translatedBody.stream = stream;
   }
 
-  // Sync the upstream body's stream flag with the internal stream decision.
-  // When a provider force-streams (e.g. openai-compatible-*), the internal 
-  // var is true but the client body may carry stream:false. Without this, we'd ask
-  // the upstream for non-streaming while parsing the reply as SSE — which breaks
-  // providers like VietAPI that emit an empty SSE body for stream:false.
-  if (translatedBody && typeof translatedBody === "object") {
-    translatedBody.stream = stream;
-  }
-
   // Dedupe duplicate built-in tools when equivalent MCP tools are present (Claude clients only).
   if (clientTool === "claude" && Array.isArray(translatedBody.tools)) {
     const { tools: deduped, stripped } = dedupeTools(translatedBody.tools);
@@ -221,6 +169,13 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   // Token savers: applied at the final body just before dispatch
   // Covers both passthrough (source shape) and translated (target shape) flows
   const finalFormat = passthrough ? sourceFormat : targetFormat;
+
+  // Final image boundary after translation: translators can create a malformed
+  // target image shape even when the source request was valid.
+  const finalCaps = getCapabilitiesForModel(provider, model);
+  if (stripUnsupportedModalities(translatedBody, finalFormat, finalCaps)) {
+    log?.debug?.("MODALITY", `validated final media shape for ${provider}/${model}`);
+  }
 
   // TTS models don't support tool messages/function calling
   if (getModelType(alias, model) === "tts" && translatedBody.messages) {
@@ -372,7 +327,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     }, headersDeadlineMs);
   }
   try {
-    const result = await executor.execute({ model, body: translatedBody, stream, credentials, signal: streamController.signal, log, proxyOptions });
+    const result = await executor.execute({ model, body: translatedBody, stream, credentials, signal: streamController.signal, log, proxyOptions, requestContext: { isCompact } });
     providerResponse = result.response;
     providerUrl = result.url;
     providerHeaders = result.headers;
@@ -414,7 +369,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
           try { await onCredentialsRefreshed(newCredentials); } catch (e) { log?.warn?.("TOKEN", `onCredentialsRefreshed failed: ${e.message}`); }
         }
         try {
-          const retryResult = await executor.execute({ model, body: translatedBody, stream, credentials, signal: streamController.signal, log, proxyOptions });
+          const retryResult = await executor.execute({ model, body: translatedBody, stream, credentials, signal: streamController.signal, log, proxyOptions, requestContext: { isCompact } });
           if (retryResult.response.ok) { providerResponse = retryResult.response; providerUrl = retryResult.url; }
         } catch { log?.warn?.("TOKEN", `${provider.toUpperCase()} | retry after refresh failed`); }
       } else {
@@ -471,7 +426,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     : resolvedStreamPolicy;
 
   const retryEmptyStream = async () => {
-    const retryResult = await executor.execute({ model, body: translatedBody, stream, credentials, signal: streamController.signal, log, proxyOptions });
+    const retryResult = await executor.execute({ model, body: translatedBody, stream, credentials, signal: streamController.signal, log, proxyOptions, requestContext: { isCompact } });
     reqLogger.logTargetRequest(retryResult.url, retryResult.headers, retryResult.transformedBody);
     if (retryResult.transformedBody) finalBody = retryResult.transformedBody;
     return retryResult;

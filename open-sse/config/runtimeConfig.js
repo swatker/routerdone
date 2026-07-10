@@ -54,8 +54,7 @@ export const DIRECT_STREAM_TOTAL_BUDGET_MS = envMs("DIRECT_STREAM_TOTAL_BUDGET_M
 
 export const COMBO_STREAM_FIRST_BYTE_TIMEOUT_MS = envMs("COMBO_STREAM_FIRST_BYTE_TIMEOUT_MS", 3 * 1000);
 export const COMBO_STREAM_FIRST_PRODUCTIVE_TIMEOUT_MS = envMs("COMBO_STREAM_FIRST_PRODUCTIVE_TIMEOUT_MS", 9 * 1000);
-export const COMBO_REASONING_STREAM_FIRST_PRODUCTIVE_TIMEOUT_MS = envMs("COMBO_REASONING_STREAM_FIRST_PRODUCTIVE_TIMEOUT_MS", 25 * 1000);
-export const PREFLIGHT_EARLY_KEEPALIVE = process.env.PREFLIGHT_EARLY_KEEPALIVE !== "0" && process.env.PREFLIGHT_EARLY_KEEPALIVE !== "false";
+export const COMBO_REASONING_STREAM_FIRST_PRODUCTIVE_TIMEOUT_MS = envMs("COMBO_REASONING_STREAM_FIRST_PRODUCTIVE_TIMEOUT_MS", 45 * 1000);
 export const COMBO_STREAM_IDLE_AFTER_PRODUCTIVE_MS = envMs("COMBO_STREAM_IDLE_AFTER_PRODUCTIVE_MS", 120 * 1000);
 export const COMBO_STREAM_TOTAL_BUDGET_MS = envMs("COMBO_STREAM_TOTAL_BUDGET_MS", 300 * 1000);
 
@@ -122,9 +121,6 @@ export function shouldForceStreamUpstream(provider, model) {
   if (typeof provider === "string" && provider.startsWith("openai-compatible-")) return true;
   if (FORCE_STREAM_UPSTREAM_PROVIDERS.has(provider)) return true;
   if (model && FORCE_STREAM_UPSTREAM_MODELS.has(`${provider}/${model}`)) return true;
-  // Custom OpenAI-compatible providers (e.g. VietAPI, AIBox) often return an
-  // empty SSE body for stream:false. Force upstream streaming for all of them;
-  // the gateway folds the SSE back into JSON when the client wants non-stream.
   return false;
 }
 // Fixed-tick preflight: poll every 3s, 2-tier caps for fast fallback

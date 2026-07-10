@@ -6,6 +6,7 @@ const NO_VISION = { vision: false, audioInput: true, pdf: true };
 const NO_AUDIO = { vision: true, audioInput: false, pdf: true };
 const NO_PDF = { vision: true, audioInput: true, pdf: false };
 const ALL = { vision: true, audioInput: true, pdf: true };
+const VALID_PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 
 describe("stripUnsupportedModalities", () => {
   it("fast-exits when model supports all modalities", () => {
@@ -47,6 +48,15 @@ describe("stripUnsupportedModalities", () => {
     const body = { messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: "x" } }] }] };
     stripUnsupportedModalities(body, FORMATS.OPENAI, NO_AUDIO);
     expect(body.messages[0].content.some((b) => b.type === "image_url")).toBe(true);
+  });
+
+  it("openai: strips invalid inline image when vision:true", () => {
+    const body = { messages: [{ role: "user", content: [
+      { type: "image_url", image_url: { url: "data:image/png;base64,QUJD" } },
+    ] }] };
+    expect(stripUnsupportedModalities(body, FORMATS.OPENAI, NO_AUDIO)).toBe(true);
+    expect(body.messages[0].content.some((b) => b.type === "image_url")).toBe(false);
+    expect(body.messages[0].content.some((b) => /invalid image data/.test(b.text || ""))).toBe(true);
   });
 
   it("claude: strips image + document by capability", () => {
@@ -102,7 +112,7 @@ describe("stripUnsupportedModalities", () => {
 
   it("responses: strips output image when vision:false", () => {
     const body = { input: [{ type: "message", output: [
-      { type: "input_image", image_url: "data:image/png;base64,QUJD" },
+      { type: "input_image", image_url: VALID_PNG },
     ] }] };
     stripUnsupportedModalities(body, FORMATS.OPENAI_RESPONSES, NO_VISION);
     expect(body.input[0].output.some((b) => Object.hasOwn(b, "image_url"))).toBe(false);
@@ -118,12 +128,38 @@ describe("stripUnsupportedModalities", () => {
     expect(body.input[0].output.some((b) => b.type === "output_text" && /invalid image data/.test(b.text))).toBe(true);
   });
 
+  it("responses: strips invalid content image_url even when vision:true", () => {
+    const body = { input: [{ role: "user", content: [
+      { type: "input_image", image_url: "data:image/png;base64,invalid!" },
+    ] }] };
+    expect(stripUnsupportedModalities(body, FORMATS.OPENAI_RESPONSES, ALL)).toBe(true);
+    expect(body.input[0].content.some((b) => b.type === "input_image")).toBe(false);
+    expect(body.input[0].content.some((b) => b.type === "input_text" && /invalid image data/.test(b.text))).toBe(true);
+  });
+
   it("responses: keeps valid output image_url when vision:true", () => {
     const body = { input: [{ type: "message", output: [
-      { type: "input_image", image_url: "data:image/png;base64,QUJD" },
+      { type: "input_image", image_url: VALID_PNG },
     ] }] };
     expect(stripUnsupportedModalities(body, FORMATS.OPENAI_RESPONSES, ALL)).toBe(false);
-    expect(body.input[0].output[0].image_url).toBe("data:image/png;base64,QUJD");
+    expect(body.input[0].output[0].image_url).toBe(VALID_PNG);
+  });
+
+  it("responses: strips non-image bytes in a data URI when vision:true", () => {
+    const body = { input: [{ role: "user", content: [
+      { type: "input_image", image_url: "data:image/png;base64,QUJD" },
+    ] }] };
+    expect(stripUnsupportedModalities(body, FORMATS.OPENAI_RESPONSES, ALL)).toBe(true);
+    expect(body.input[0].content.some((b) => b.type === "input_image")).toBe(false);
+    expect(body.input[0].content.some((b) => /invalid image data/.test(b.text || ""))).toBe(true);
+  });
+
+  it("responses: strips non-canonical base64 image data", () => {
+    const body = { input: [{ role: "user", content: [
+      { type: "input_image", image_url: "data:image/png;base64,iVBORw0KGgo==A" },
+    ] }] };
+    expect(stripUnsupportedModalities(body, FORMATS.OPENAI_RESPONSES, ALL)).toBe(true);
+    expect(body.input[0].content.some((b) => /invalid image data/.test(b.text || ""))).toBe(true);
   });
 
   it("responses: keeps remote output image_url when vision:true", () => {

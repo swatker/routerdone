@@ -63,6 +63,23 @@ function detectImageMime(buf) {
   return null;
 }
 
+// Validate an inline image data URI strictly before forwarding to providers.
+export function isValidImageDataUri(value) {
+  const parsed = parseDataUri(value);
+  if (!parsed || !/^image\/[a-z0-9.+-]+$/i.test(parsed.mimeType)) return false;
+  const payload = parsed.base64;
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(payload) || payload.length % 4 !== 0) return false;
+
+  let bytes;
+  try {
+    bytes = Buffer.from(payload, "base64");
+  } catch {
+    return false;
+  }
+  if (bytes.length === 0 || bytes.toString("base64") !== payload) return false;
+  return detectImageMime(bytes) === parsed.mimeType.toLowerCase();
+}
+
 /**
  * Fetch a remote image URL and return it as a base64 data URI.
  * Hardened against SSRF (private/metadata IPs), memory DoS (size cap),

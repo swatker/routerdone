@@ -7,24 +7,13 @@ const log = { info: () => {}, warn: () => {}, debug: () => {} };
 // Minimal OpenAI-chat Response stub with the .ok + .clone().json() surface the engine uses.
 function okResponse(content, { delayMs = 0 } = {}) {
   const json = { choices: [{ message: { role: "assistant", content } }] };
-  const make = () => ({ ok: true, status: 200, headers: { get: () => "application/json" }, clone: make, json: async () => json });
+  const make = () => ({ ok: true, status: 200, clone: make, json: async () => json });
   const res = make();
   return delayMs > 0 ? new Promise((r) => setTimeout(() => r(res), delayMs)) : res;
 }
 
-function sseResponse(content) {
-  const raw = [
-    `data: ${JSON.stringify({ id: "chatcmpl-panel", choices: [{ index: 0, delta: { role: "assistant", content }, finish_reason: null }] })}`,
-    "",
-    "data: [DONE]",
-    "",
-  ].join("\n");
-  const make = () => ({ ok: true, status: 200, headers: { get: () => "text/event-stream" }, clone: make, text: async () => raw });
-  return make();
-}
-
 function errResponse(status = 500) {
-  const make = () => ({ ok: false, status, headers: { get: () => "application/json" }, clone: make, json: async () => ({ error: { message: "boom" } }) });
+  const make = () => ({ ok: false, status, clone: make, json: async () => ({ error: { message: "boom" } }) });
   return make();
 }
 
@@ -62,9 +51,9 @@ describe("fusion combo", () => {
     expect(seen.slice(0, 3).sort()).toEqual(["p/a", "p/b", "p/c"]);
     expect(seen[3]).toBe("p/judge");
 
-    // Panel calls stream to avoid first-byte timeout on heavy prompts, with tools stripped.
+    // Panel calls are non-streaming with tools stripped.
     for (const [body, model, routeInfo] of handleSingleModel.mock.calls.filter(([, m]) => m !== "p/judge")) {
-      expect(body.stream).toBe(true);
+      expect(body.stream).toBe(false);
       expect(body.tools).toBeUndefined();
       expect(routeInfo?.isPanel).toBe(true);
     }
@@ -80,32 +69,6 @@ describe("fusion combo", () => {
     expect(routeInfo?.isPanel).toBeFalsy();
 
     expect(res.ok).toBe(true);
-  });
-
-  it("parses streaming panel responses before judging", async () => {
-    const handleSingleModel = vi.fn(async (_body, model) => {
-      if (model === "p/judge") return okResponse("FINAL");
-      return sseResponse(`stream-${model}`);
-    });
-
-    await handleFusionChat({
-      body: { messages: [{ role: "user", content: "Q" }], stream: true },
-      models: ["p/a", "p/b"],
-      handleSingleModel,
-      log,
-      judgeModel: "p/judge",
-    });
-
-    const panelCalls = handleSingleModel.mock.calls.filter(([,, routeInfo]) => routeInfo?.isPanel === true);
-    expect(panelCalls.length).toBe(2);
-    for (const [panelBody] of panelCalls) {
-      expect(panelBody.stream).toBe(true);
-    }
-
-    const judgeCall = handleSingleModel.mock.calls.find(([, m]) => m === "p/judge");
-    const judgeText = judgeCall[0].messages.at(-1).content;
-    expect(judgeText).toContain("stream-p/a");
-    expect(judgeText).toContain("stream-p/b");
   });
 
   it("defaults the judge to the first panel model when none is set", async () => {

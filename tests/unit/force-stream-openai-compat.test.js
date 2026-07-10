@@ -7,8 +7,6 @@ describe("shouldForceStreamUpstream - custom openai-compatible providers", () =>
   });
 
   it("forces streaming for any openai-compatible-* provider (VietAPI fix)", () => {
-    // VietAPI is configured as a custom openai-compatible provider.
-    // It returns an empty SSE body for stream:false, so we must force stream.
     expect(
       shouldForceStreamUpstream("openai-compatible-chat-c93ab2fa-45dc-41bc-90d4-43aadb266ddc", "opus-4.6")
     ).toBe(true);

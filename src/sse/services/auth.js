@@ -220,26 +220,6 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
  * @param {string|null} model - The specific model that triggered the error
  * @returns {{ shouldFallback: boolean, cooldownMs: number }}
  */
-
-/**
- * Build per-model comboPreflight field keys.
- * When model is provided, stores counter per-model (e.g. comboPreflightFailureCount_glm-5.1).
- * When model is null, falls back to connection-level flat fields.
- */
-function comboPreflightFields(model) {
-  if (model) {
-    return {
-      kind: `comboPreflightFailureKind_${model}`,
-      count: `comboPreflightFailureCount_${model}`,
-      at: `comboPreflightFailureAt_${model}`,
-    };
-  }
-  return {
-    kind: "comboPreflightFailureKind",
-    count: "comboPreflightFailureCount",
-    at: "comboPreflightFailureAt",
-  };
-}
 export async function markAccountUnavailable(connectionId, status, errorText, provider = null, model = null, resetsAtMs = null) {
   if (!connectionId || connectionId === "noauth") return { shouldFallback: false, cooldownMs: 0 };
   const connections = await getProviderConnections({ provider });
@@ -249,14 +229,9 @@ export async function markAccountUnavailable(connectionId, status, errorText, pr
   const reasonText = typeof errorText === "string" ? errorText : (errorText ? JSON.stringify(errorText) : "Provider error");
   const busyOrConcurrency = isBusyConcurrencyError(reasonText);
   const preflightTimeout = isPreflightTimeoutError(status, reasonText);
-  // Per-model comboPreflight counters: same model failing twice escalates to
-  // connection lock, but different models each failing once do NOT escalate.
-  const cpFields = comboPreflightFields(model);
-  const lastFailureAtMs = conn?.[cpFields.at] ? new Date(conn[cpFields.at]).getTime() : 0;
-  const prevKind = conn?.[cpFields.kind];
-  const targetKind = busyOrConcurrency ? "busy" : preflightTimeout ? "preflight" : null;
-  const recentSameKind = lastFailureAtMs && (now - lastFailureAtMs <= 60 * 1000) && prevKind === targetKind;
-  const recentFailureCount = (busyOrConcurrency || preflightTimeout) ? (recentSameKind ? (conn?.[cpFields.count] || 0) + 1 : 1) : 0;
+  const lastFailureAtMs = conn?.comboPreflightFailureAt ? new Date(conn.comboPreflightFailureAt).getTime() : 0;
+  const recentSameKind = lastFailureAtMs && (now - lastFailureAtMs <= 60 * 1000) && conn?.comboPreflightFailureKind === (busyOrConcurrency ? "busy" : preflightTimeout ? "preflight" : null);
+  const recentFailureCount = (busyOrConcurrency || preflightTimeout) ? (recentSameKind ? (conn?.comboPreflightFailureCount || 0) + 1 : 1) : 0;
 
   // Provider-specific precise cooldown (e.g. codex usage_limit_reached resets_at) overrides backoff
   let shouldFallback, cooldownMs, newBackoffLevel, selfHeal;
@@ -291,18 +266,16 @@ export async function markAccountUnavailable(connectionId, status, errorText, pr
 
   const reason = reasonText.slice(0, 100);
   const lockUpdate = buildModelLockUpdate(lockConnection ? null : model, cooldownMs);
-  // Per-model comboPreflight counters write (via comboPreflightFields helper)
-  const cpWrite = comboPreflightFields(model);
   const failureUpdate = (busyOrConcurrency || preflightTimeout)
     ? {
-        [cpWrite.kind]: busyOrConcurrency ? "busy" : "preflight",
-        [cpWrite.count]: recentFailureCount,
-        [cpWrite.at]: new Date(now).toISOString(),
+        comboPreflightFailureKind: busyOrConcurrency ? "busy" : "preflight",
+        comboPreflightFailureCount: recentFailureCount,
+        comboPreflightFailureAt: new Date(now).toISOString(),
       }
     : {
-        [cpWrite.kind]: null,
-        [cpWrite.count]: 0,
-        [cpWrite.at]: null,
+        comboPreflightFailureKind: null,
+        comboPreflightFailureCount: 0,
+        comboPreflightFailureAt: null,
       };
 
   // Billing/credit exhaustion: auto-disable the connection so it stops being
@@ -374,23 +347,16 @@ export async function clearAccountError(connectionId, currentConnection, model =
 
   // Only reset error state if no active locks remain
   if (remainingActiveLocks.length === 0) {
-    const cpClear = comboPreflightFields(model);
-    const baseClear = {
+    Object.assign(clearObj, {
       testStatus: "active",
       lastError: null,
       lastErrorAt: null,
       errorCode: null,
       backoffLevel: 0,
-      // Also clear old connection-level flat fields (backward compat)
       comboPreflightFailureKind: null,
       comboPreflightFailureCount: 0,
       comboPreflightFailureAt: null,
-    };
-    // Clear per-model comboPreflight counters for the succeeded model
-    baseClear[cpClear.kind] = null;
-    baseClear[cpClear.count] = 0;
-    baseClear[cpClear.at] = null;
-    Object.assign(clearObj, baseClear);
+    });
   }
 
   await updateProviderConnection(connectionId, clearObj);

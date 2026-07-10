@@ -29,10 +29,9 @@ export function compressMessages(body, enabled) {
   const compress = (text, shape, age) => {
     if (typeof text !== "string") return text;
     // Progressive compression: recent -> gentle, old -> aggressive
-    // Keep the base floor at MIN_COMPRESS_SIZE so clearly structured tool output
-    // (diff/grep/log) still compresses even when it is in a recent turn. Age only
-    // controls the extra aggressive second pass for old history.
-    const minBytes = MIN_COMPRESS_SIZE;
+    let minBytes = MIN_COMPRESS_SIZE;
+    if (age < AGE_LIGHT_TURNS) minBytes = AGE_LIGHT_MIN_BYTES;
+    else if (age >= AGE_HEAVY_TURNS) minBytes = AGE_HEAVY_MIN_BYTES;
     if (text.length < minBytes) return text;
     const fp = text.length + ":" + text.slice(0, 300);
     if (seen.has(fp)) {
@@ -128,10 +127,9 @@ function compressKiroFormat(body, enabled) {
   const seen = new Set();
   const compress = (text, shape, age) => {
     if (typeof text !== "string") return text;
-    // Keep the base floor at MIN_COMPRESS_SIZE so clearly structured tool output
-    // (diff/grep/log) still compresses even when it is in a recent turn. Age only
-    // controls the extra aggressive second pass for old history.
-    const minBytes = MIN_COMPRESS_SIZE;
+    let minBytes = MIN_COMPRESS_SIZE;
+    if (age < AGE_LIGHT_TURNS) minBytes = AGE_LIGHT_MIN_BYTES;
+    else if (age >= AGE_HEAVY_TURNS) minBytes = AGE_HEAVY_MIN_BYTES;
     if (text.length < minBytes) return text;
     const fp = text.length + ":" + text.slice(0, 300);
     if (seen.has(fp)) {

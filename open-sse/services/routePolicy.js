@@ -1,3 +1,4 @@
+import { resolveRuntimeProfileConfig } from "./runtimeProfile.js";
 import {
   DIRECT_STREAM_FIRST_BYTE_TIMEOUT_MS,
   DIRECT_STREAM_FIRST_PRODUCTIVE_TIMEOUT_MS,
@@ -69,27 +70,30 @@ export function isRetryableTransientStatus(status) {
   return TRANSIENT_RETRY_STATUSES.has(Number(status));
 }
 
-function clampRouteFirstProductiveTimeoutMs(routeMode, fallbackMs) {
-  // Clamp saved per-combo overrides so an old/high dashboard value cannot
-  // inflate an attempt deadline above what the route mode actually tolerates.
+export function adaptiveFirstProductiveTimeoutMs(routeMode, fallbackMs, stats = null) {
+  // Clamp even without stats so saved per-combo overrides cannot inflate the
+  // attempt deadline above what the route mode actually tolerates.
   const bounds = routeMode === "combo"
-    ? { min: 4000, max: 45000 }
+    ? { min: 4000, max: 12000 }
     : routeMode === "fusion"
       ? { min: 3000, max: 8000 }
       : { min: 5000, max: fallbackMs };
-  return clamp(fallbackMs, bounds.min, bounds.max);
+  if (!stats || !Number.isFinite(stats.p90TtftMs)) return clamp(fallbackMs, bounds.min, bounds.max);
+  return clamp(Math.round(stats.p90TtftMs * 1.8 + 1500), bounds.min, bounds.max);
 }
 
 export function resolveRoutePolicy(routeMode = "direct", overrides = {}) {
   const key = DEFAULTS[routeMode] ? routeMode : "direct";
   const base = DEFAULTS[key];
+  const profile = resolveRuntimeProfileConfig(overrides.providerSpecificData);
+  const profileStream = profile.stream || {};
   const streamOverrides = overrides.stream || {};
   const legacyFirstProductive = overrides.streamPreflightTimeoutMs ?? overrides.preflightTimeoutMs;
   const firstProductiveDefault = legacyFirstProductive ?? streamOverrides.firstProductiveTimeoutMs ?? base.stream.firstProductiveTimeoutMs;
   const stream = {
-    firstByteTimeoutMs: toMs(streamOverrides.firstByteTimeoutMs, base.stream.firstByteTimeoutMs),
-    firstProductiveTimeoutMs: clampRouteFirstProductiveTimeoutMs(key, toMs(firstProductiveDefault, base.stream.firstProductiveTimeoutMs)),
-    idleAfterProductiveMs: toMs(streamOverrides.idleAfterProductiveMs, base.stream.idleAfterProductiveMs),
+    firstByteTimeoutMs: toMs(streamOverrides.firstByteTimeoutMs, profileStream.firstByteTimeoutMs ?? base.stream.firstByteTimeoutMs),
+    firstProductiveTimeoutMs: adaptiveFirstProductiveTimeoutMs(key, toMs(firstProductiveDefault, profileStream.firstProductiveTimeoutMs ?? base.stream.firstProductiveTimeoutMs), overrides.ttftStats),
+    idleAfterProductiveMs: toMs(streamOverrides.idleAfterProductiveMs, profileStream.idleAfterProductiveMs ?? base.stream.idleAfterProductiveMs),
     totalBudgetMs: toMs(streamOverrides.totalBudgetMs, base.stream.totalBudgetMs),
   };
 
@@ -97,5 +101,5 @@ export function resolveRoutePolicy(routeMode = "direct", overrides = {}) {
   if (overrides.retryAttempts != null) retry.attempts = Math.max(0, Math.min(Number.parseInt(overrides.retryAttempts, 10) || 0, 10));
   if (overrides.retryDelayMs != null) retry.delayMs = Math.max(0, Math.min(Number.parseInt(overrides.retryDelayMs, 10) || 0, 30000));
 
-  return { routeMode: key, stream, retry };
+  return { routeMode: key, stream, retry, heartbeat: profile.heartbeat || { enabled: false } };
 }

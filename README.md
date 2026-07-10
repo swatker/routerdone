@@ -159,41 +159,6 @@ Recommended setup:
 
 Use neutral combo names such as `helper.fallback`, `coding.fallback`, or `vision.fallback`.
 
-### Vision Preprocessing
-
-RouterDone can convert image blocks in a request into OCR text before the request reaches a model that has no vision support, so non-vision models can still answer questions about images.
-
-How it works:
-
-1. A chat request contains `image_url` / `image` content blocks.
-2. Before combo dispatch, RouterDone calls a vision-capable model (default `oc/mimo-v2.5-free`) via self-loopback to read each image and return an OCR + brief description.
-3. Image blocks in the last user message are replaced with `[Image description: ...]` text; images in older turns are stripped without a vision call.
-4. The body now contains only text, so any model in the combo can understand it.
-
-Skip rules:
-
-- If the target model already supports vision (per `getCapabilitiesForModel`), preprocessing is skipped and the model reads the raw image directly — no quality downgrade. This also sees through combo names: a combo whose every member is vision-capable (e.g. a `vision` combo of only `oc/mimo-v2.5-free`) is skipped, so the combo reads the raw image once instead of being double-processed. Mixed/non-vision combos still preprocess so fallback members get text context.
-- A `_skipVision` flag on the self-loopback request prevents infinite recursion.
-- If the vision call fails or times out (30s), the original body passes through and the normal modality-stripping in chatCore handles the images. Vision preprocessing is non-fatal.
-
-Configuration:
-
-1. Open `Dashboard -> Profile -> Vision Preprocessing`.
-2. Toggle preprocessing on/off.
-3. Pick or enter a vision model string in `provider/model` form (e.g. `oc/mimo-v2.5-free`).
-
-Combo deadline (important for vision combos):
-
-The combo route enforces a headers deadline of `firstByteTimeoutMs(3000) + firstProductiveTimeoutMs(9000) = 12000ms`. A vision model that needs ~10–12s per image (e.g. `oc/mimo-v2.5-free`) can hit that 12s deadline and abort to `502 Upstream headers timeout` on slower turns. For a vision-only combo, raise its preflight timeout in the runtime DB settings:
-
-```text
-comboStrategies["<comboName>"].preflightTimeoutMs = 30000   // deadline -> 33s
-```
-
-This is a runtime config (not a code commit) — re-apply it after a fresh DB deploy via Dashboard combo settings or a direct DB edit.
-
-The vision model is instructed to only read the image — it never answers the user's question.
-
 ### Docker Compose
 
 The included `docker-compose.yml` persists:
@@ -429,41 +394,6 @@ Thiết lập khuyến nghị:
 5. Giữ hoặc thêm redirect trỏ model phụ trợ tới `helper.fallback`.
 
 Dùng tên combo trung lập như `helper.fallback`, `coding.fallback`, hoặc `vision.fallback`.
-
-### Vision Preprocessing (Tiền xử lý ảnh)
-
-RouterDone có thể chuyển các khối ảnh trong request thành văn bản OCR trước khi request tới model không hỗ trợ đọc ảnh, giúp các model non-vision vẫn trả lời được câu hỏi về ảnh.
-
-Cách hoạt động:
-
-1. Một chat request chứa khối nội dung `image_url` / `image`.
-2. Trước khi dispatch combo, RouterDone gọi một model hỗ trợ vision (mặc định `oc/mimo-v2.5-free`) qua self-loopback để đọc từng ảnh và trả về OCR + mô tả ngắn.
-3. Các khối ảnh trong tin nhắn user cuối cùng được thay bằng văn bản `[Image description: ...]`; ảnh ở các lượt cũ bị gỡ bỏ mà không gọi vision model.
-4. Body lúc này chỉ còn văn bản, nên mọi model trong combo đều hiểu được.
-
-Quy tắc bỏ qua:
-
-- Nếu model đích đã hỗ trợ vision (theo `getCapabilitiesForModel`), bỏ qua tiền xử lý và để model đọc ảnh gốc trực tiếp — không giảm chất lượng. Quy tắc này cũng nhìn xuyên qua tên combo: combo mà mọi model đều hỗ trợ vision (ví dụ combo `vision` chỉ chứa `oc/mimo-v2.5-free`) sẽ bị bỏ qua, giúp combo đọc ảnh gốc một lần thay vì bị xử lý hai lần. Combo hỗn hợp / non-vision vẫn tiền xử lý để các model fallback nhận văn bản mô tả.
-- Cờ `_skipVision` trên request self-loopback ngăn đệ quy vô hạn.
-- Nếu lệnh gọi vision thất bại hoặc hết thời gian (30s), body gốc được truyền qua và bước modality-stripping thông thường trong chatCore xử lý ảnh. Tiền xử lý vision là non-fatal.
-
-Cấu hình:
-
-1. Mở `Dashboard -> Profile -> Vision Preprocessing`.
-2. Bật/tắt tiền xử lý.
-3. Chọn hoặc nhập chuỗi vision model dạng `provider/model` (ví dụ `oc/mimo-v2.5-free`).
-
-Deadline combo (quan trọng với combo vision):
-
-Route combo áp dụng deadline headers là `firstByteTimeoutMs(3000) + firstProductiveTimeoutMs(9000) = 12000ms`. Một vision model cần ~10–12s mỗi ảnh (ví dụ `oc/mimo-v2.5-free`) có thể chạm deadline 12s và bị abort thành `502 Upstream headers timeout` ở các lượt chậm. Với combo chỉ dùng vision, tăng preflight timeout của combo trong cài đặt DB runtime:
-
-```text
-comboStrategies["<tênCombo>"].preflightTimeoutMs = 30000   // deadline -> 33s
-```
-
-Đây là cấu hình runtime (không phải commit code) — cần thiết lập lại sau khi deploy DB mới qua cài đặt combo trong Dashboard hoặc chỉnh DB trực tiếp.
-
-Vision model được hướng dẫn chỉ đọc ảnh — không bao giờ trả lời câu hỏi của user.
 
 ### Docker Compose
 

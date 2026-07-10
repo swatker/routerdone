@@ -9,6 +9,7 @@ import {
 import { cacheClaudeHeaders } from "open-sse/utils/claudeHeaderCache.js";
 import { getSettings, getApiKeyByRawKey } from "@/lib/localDb";
 import { getModelInfo, getComboModels } from "../services/model.js";
+import { classifyModelRoute, isAutoRouteFailure } from "open-sse/services/modelRouting.js";
 import { checkModelAllowed, checkKeyQuota } from "../services/keyPolicy.js";
 import { handleChatCore } from "open-sse/handlers/chatCore.js";
 import { DEFAULT_HEADROOM_URL } from "@/lib/headroom/detect";
@@ -17,8 +18,34 @@ import { handleComboChat, handleFusionChat } from "open-sse/services/combo.js";
 import { handleBypassRequest } from "open-sse/utils/bypassHandler.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
 import { resolveRoutePolicy } from "open-sse/services/routePolicy.js";
+import { buildContextSummaryBackup, detectContextBackupFormat, isContextBackupEligible, normalizeContextBackupConfig } from "../services/contextSummaryBackup.js";
 import { preprocessVisionContent, hasImageContent, resolveTargetCaps, shouldDeferComboVisionPreprocessing } from "../services/visionPreprocessor.js";
 import { getCapabilitiesForModel } from "open-sse/providers/capabilities.js";
+
+function estimateBackupTokens(body, format) {
+  const source = format === "responses" ? body?.input : body?.messages;
+  return Math.ceil(JSON.stringify(source || []).length / 4);
+}
+
+function applyContextSummaryBackup(body, settings, request) {
+  let config;
+  try { config = normalizeContextBackupConfig(settings?.routerDoneContextBackup); } catch { return body; }
+  const pathname = new URL(request.url).pathname;
+  const format = detectContextBackupFormat(body, pathname);
+  const details = { format: format || "unsupported", threshold: config.thresholdTokens };
+  if (!config.enabled) { log.info("CONTEXT-BACKUP", "skipped: disabled", details); return body; }
+  if (!format || !isContextBackupEligible(body, { format })) { log.info("CONTEXT-BACKUP", "skipped: unsafe or unsupported shape", details); return body; }
+  const estimatedTokens = estimateBackupTokens(body, format);
+  if (estimatedTokens < config.thresholdTokens) { log.info("CONTEXT-BACKUP", "skipped: below threshold", { ...details, estimatedTokens }); return body; }
+  const backedUp = buildContextSummaryBackup(body, { ...config, format });
+  if (!backedUp) { log.info("CONTEXT-BACKUP", "skipped: insufficient turns/content", { ...details, estimatedTokens }); return body; }
+  log.info("CONTEXT-BACKUP", "applied", { ...details, estimatedTokens, originalItems: body[format === "responses" ? "input" : "messages"].length, backedUpItems: backedUp[format === "responses" ? "input" : "messages"].length });
+  return backedUp;
+}
+
+function maybeBackupBody(body, settings, request) {
+  return applyContextSummaryBackup(body, settings, request);
+}
 
 const MODEL_REDIRECTS = new Map([
   ["gpt-5.4-mini", "helper.fallback"],
@@ -121,7 +148,6 @@ export async function handleChat(request, clientRawRequest = null) {
     body = { ...body, model: redirectedModel };
   }
 
-
   // Per-API-key policy gate (resale / donate quota). modelStr is now the
   // post-redirect effective requested name — the right value to match a
   // "specific model" or "specific combo" restriction against. Run this before
@@ -199,6 +225,7 @@ export async function handleChat(request, clientRawRequest = null) {
   }
 
   // Check if model is a combo (has multiple models with fallback)
+  body = maybeBackupBody(body, settings, request);
   if (comboModels) {
     // Check for combo-specific strategy first, fallback to global
     const comboStrategies = settings.comboStrategies || {};
@@ -281,7 +308,16 @@ export async function handleChat(request, clientRawRequest = null) {
  * Handle single model chat request
  */
 async function handleSingleModelChat(body, modelStr, clientRawRequest = null, request = null, apiKey = null, attemptContext = {}) {
-  const modelInfo = await getModelInfo(modelStr);
+  // Auto routing is opt-in; explicit model/combo requests bypass classification unchanged.
+  const route = classifyModelRoute(modelStr, {
+    auto: attemptContext.autoRoute === true,
+    body,
+    localModel: attemptContext.localModel,
+    strongModel: attemptContext.strongModel,
+    explicitModel: modelStr !== "auto" ? modelStr : "",
+  });
+  const selectedModel = route.model || modelStr;
+  const modelInfo = await getModelInfo(selectedModel);
 
   // If provider is null, this might be a combo name - check and handle
   if (!modelInfo.provider) {
@@ -451,6 +487,19 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
     });
 
     if (result.success) return result.response;
+
+    // Local auto-route failure → one-way strong fallback; never downgrade strong → local.
+    if (route.mode === "local" && route.fallbackModel && isAutoRouteFailure(result.status)) {
+      log.warn("ROUTING", `Local route failed (${result.status}), falling back to ${route.fallbackModel}`);
+      return handleSingleModelChat(
+        { ...body, model: route.fallbackModel },
+        route.fallbackModel,
+        clientRawRequest,
+        request,
+        apiKey,
+        { ...attemptContext, autoRoute: false, localModel: null, strongModel: null }
+      );
+    }
 
     // Mark account unavailable (auto-calculates cooldown with exponential backoff, or precise resetsAtMs)
     const { shouldFallback } = await markAccountUnavailable(credentials.connectionId, result.status, result.error, provider, model, result.resetsAtMs);

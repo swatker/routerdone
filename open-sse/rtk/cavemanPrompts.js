@@ -56,8 +56,8 @@ export const CAVEMAN_PROMPTS = {
 
   [CAVEMAN_LEVELS.ULTRA]: [
     "Respond ultra-terse. Maximum compression. Telegraphic.",
-    "Use only standard technical acronyms. Strip conjunctions when clear. One word when one word enough.",
-    "Pattern: [thing]. [result]. [fix].",
+    "Abbreviate (DB/auth/config/req/res/fn/impl), strip conjunctions, use arrows for causality (X → Y). One word when one word enough.",
+    "Pattern: [thing] → [result]. [fix].",
     SHARED_EXAMPLES,
     SHARED_BOUNDARIES,
     SHARED_AUTO_CLARITY,

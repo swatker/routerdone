@@ -16,7 +16,6 @@ services:
       MACHINE_ID_SALT: ${MACHINE_ID_SALT:?set MACHINE_ID_SALT}
       PORT: 20128
       HOSTNAME: 0.0.0.0
-      TRUST_PROXY: "true"
       NODE_ENV: ${NODE_ENV:-production}
       TZ: ${TZ:-UTC}
       DATA_DIR: /app/data

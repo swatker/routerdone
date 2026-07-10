@@ -5,14 +5,6 @@ import { getDefaultModel } from "open-sse/config/providerModels.js";
 import { resolveOllamaLocalHost, resolveXiaomiTokenplanBaseUrl, PROVIDERS } from "open-sse/config/providers.js";
 import { openaiToCommandCodeRequest } from "open-sse/translator/request/openai-to-commandcode.js";
 import { normalizeProviderId } from "@/lib/providerNormalization";
-import { buildClineHeaders, getClineAccessToken } from "@/shared/utils/clineAuth";
-
-function isClineBaseUrl(url) {
-  try {
-    const hostname = new URL(url).hostname.toLowerCase();
-    return hostname === "api.cline.bot" || hostname.endsWith(".cline.bot");
-  } catch { return false; }
-}
 
 // Probe a webSearch/webFetch provider using its searchConfig/fetchConfig.
 // Returns true if API key is accepted (status !== 401 && !== 403).
@@ -110,54 +102,15 @@ export async function POST(request) {
         if (!node) {
           return NextResponse.json({ error: "OpenAI Compatible node not found" }, { status: 404 });
         }
-        const baseUrl = node.baseUrl?.replace(/\/$/, "") || "";
-        const isCline = isClineBaseUrl(baseUrl);
-        // Cline: use raw Authorization header for REST API key (sk_*),
-        // or OAuth headers with workos: prefix for OAuth token
-        const isClineOAuth = isCline && apiKey?.startsWith("workos:");
-        const chatHeaders = isCline && !isClineOAuth
-          ? { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" }
-          : isClineOAuth
-            ? { ...buildClineHeaders(getClineAccessToken(apiKey)), "Content-Type": "application/json" }
-            : { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" };
-        // Cline has no /models endpoint — skip to chat completions directly
-        if (isCline) {
-          const chatRes = await fetch(`${baseUrl}/chat/completions`, {
-            method: "POST",
-            headers: chatHeaders,
-            body: JSON.stringify({
-              model: "anthropic/claude-sonnet-4.6",
-              messages: [{ role: "user", content: "ping" }],
-              max_tokens: 1,
-            }),
-          });
-          // 401/403 = bad key; anything else (500, 4xx) = auth passed
-          isValid = chatRes.status !== 401 && chatRes.status !== 403;
-          return NextResponse.json({ valid: isValid, error: isValid ? null : "Invalid API key" });
-        }
-        // Standard OpenAI-compatible: try /models then chat fallback
-        const modelsUrl = `${baseUrl}/models`;
-        const res = await fetch(modelsUrl, { headers: chatHeaders });
-        if (res.ok) {
-          return NextResponse.json({ valid: true });
-        }
-        // Fallback: try chat/completions on 401/403 (some providers reject /models)
-        if (res.status === 401 || res.status === 403) {
-          const chatRes = await fetch(`${baseUrl}/chat/completions`, {
-            method: "POST",
-            headers: chatHeaders,
-            body: JSON.stringify({
-              model: "test",
-              messages: [{ role: "user", content: "ping" }],
-              max_tokens: 1,
-            }),
-          });
-          isValid = chatRes.status !== 401 && chatRes.status !== 403;
-          return NextResponse.json({ valid: isValid, error: isValid ? null : "Invalid API key" });
-        }
-        // Other errors (5xx, 404) — key likely valid, endpoint differs
-        isValid = true;
-        return NextResponse.json({ valid: true, method: "ambiguous" });
+        const modelsUrl = `${node.baseUrl?.replace(/\/$/, "")}/models`;
+        const res = await fetch(modelsUrl, {
+          headers: { "Authorization": `Bearer ${apiKey}` },
+        });
+        isValid = res.ok;
+        return NextResponse.json({
+          valid: isValid,
+          error: isValid ? null : "Invalid API key",
+        });
       }
 
       // Custom Embedding nodes: probe /models (most embedding APIs are OpenAI-compatible)

@@ -2,6 +2,7 @@
 // Driven by getCapabilitiesForModel: vision/audioInput/pdf. Replaces removed
 // media with a short text placeholder so messages never become empty.
 import { FORMATS } from "../formats.js";
+import { isValidImageDataUri } from "./image.js";
 
 // Placeholder text inserted where a media block was removed.
 // Current turn: explain the active model can't read what the user just sent.
@@ -38,27 +39,20 @@ function capForOpenAIBlock(block) {
   return null;
 }
 
-function isImageDataUrl(value) {
-  if (typeof value !== "string") return false;
-  const match = value.match(/^data:image\/[a-z0-9.+-]+;base64,([A-Za-z0-9+/]*={0,2})$/i);
-  if (!match || match[1].length === 0 || match[1].length % 4 === 1) return false;
-  try {
-    return Buffer.from(match[1], "base64").length > 0;
-  } catch {
-    return false;
-  }
-}
-
 function isImageUrl(value) {
-  return isImageDataUrl(value) || /^https?:\/\/\S+$/i.test(value);
+  return isValidImageDataUri(value) || /^https?:\/\/\S+$/i.test(value);
 }
 
-function hasInvalidResponsesOutputImageUrl(body) {
-  return Array.isArray(body?.input) && body.input.some((item) =>
-    Array.isArray(item?.output) && item.output.some((b) =>
+function hasInvalidResponsesImageUrl(body) {
+  return Array.isArray(body?.input) && body.input.some((item) => {
+    const contentInvalid = Array.isArray(item?.content) && item.content.some((b) =>
+      b?.type === "input_image" && !isImageUrl(b.image_url)
+    );
+    const outputInvalid = Array.isArray(item?.output) && item.output.some((b) =>
       Object.hasOwn(b || {}, "image_url") && !isImageUrl(b.image_url)
-    )
-  );
+    );
+    return contentInvalid || outputInvalid;
+  });
 }
 
 function isResponsesFormat(sourceFormat) {
@@ -95,7 +89,21 @@ function stripOpenAI(body, caps) {
   body.messages.forEach((msg, i) => {
     if (!Array.isArray(msg.content)) return;
     const removed = new Set();
-    msg.content = filterBlocks(msg.content, capForOpenAIBlock, caps, removed, i === last);
+    let removedInvalidImage = false;
+    msg.content = msg.content.filter((block) => {
+      const cap = capForOpenAIBlock(block);
+      if (cap && caps[cap] === false) { removed.add(cap); return false; }
+      if (block?.type === "image_url") {
+        const url = typeof block.image_url === "string" ? block.image_url : block.image_url?.url;
+        if (typeof url === "string" && url.startsWith("data:") && !isValidImageDataUri(url)) {
+          removedInvalidImage = true;
+          return false;
+        }
+      }
+      return true;
+    });
+    for (const cap of removed) msg.content.push({ type: "text", text: ph(cap, i === last) });
+    if (removedInvalidImage) msg.content.push({ type: "text", text: invalidImagePh(i === last) });
   });
 }
 
@@ -117,12 +125,18 @@ function stripResponses(body, caps) {
   body.input.forEach((item, i) => {
     if (Array.isArray(item.content)) {
       const removed = new Set();
+      let removedInvalidImage = false;
       item.content = item.content.filter((b) => {
         const cap = b?.type === "input_image" ? "vision" : b?.type === "input_file" ? "pdf" : null;
         if (cap && caps[cap] === false) { removed.add(cap); return false; }
+        if (b?.type === "input_image" && !isImageUrl(b.image_url)) {
+          removedInvalidImage = true;
+          return false;
+        }
         return true;
       });
       for (const cap of removed) item.content.push({ type: "input_text", text: ph(cap, i === last) });
+      if (removedInvalidImage) item.content.push({ type: "input_text", text: invalidImagePh(i === last) });
     }
 
     if (Array.isArray(item.output)) {
@@ -172,7 +186,7 @@ export function stripUnsupportedModalities(body, sourceFormat, caps) {
     caps.vision !== false &&
     caps.audioInput !== false &&
     caps.pdf !== false &&
-    !(isResponsesFormat(sourceFormat) && hasInvalidResponsesOutputImageUrl(body))
+    !(isResponsesFormat(sourceFormat) && hasInvalidResponsesImageUrl(body))
   ) return false;
 
   switch (sourceFormat) {

@@ -2,13 +2,12 @@
 
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { Card, Button, Toggle, Input, Select } from "@/shared/components";
+import { Card, Button, Toggle, Input } from "@/shared/components";
 import Modal, { ConfirmModal } from "@/shared/components/Modal";
 import LanguageSwitcher from "@/shared/components/LanguageSwitcher";
 import { useTheme } from "@/shared/hooks/useTheme";
 import { cn } from "@/shared/utils/cn";
 import { APP_CONFIG } from "@/shared/constants/config";
-import { FREE_PROVIDERS } from "@/shared/constants/providers";
 import { LOCALE_COOKIE, normalizeLocale } from "@/i18n/config";
 import { LOCALE_FLAGS } from "@/shared/constants/locales";
 
@@ -21,9 +20,6 @@ function getLocaleFromCookie() {
   return normalizeLocale(value);
 }
 
-
-// Free providers that need no auth — always available without connection
-const NO_AUTH_PROVIDER_IDS = Object.keys(FREE_PROVIDERS).filter(id => FREE_PROVIDERS[id].noAuth);
 export default function ProfilePage() {
   const router = useRouter();
   const { theme, setTheme, isDark } = useTheme();
@@ -32,8 +28,6 @@ export default function ProfilePage() {
   const [shutdownOpen, setShutdownOpen] = useState(false);
   const [isShuttingDown, setIsShuttingDown] = useState(false);
   const [settings, setSettings] = useState({ fallbackStrategy: "fill-first" });
-  const [visionModelOptions, setVisionModelOptions] = useState([]);
-  const [customVisionModel, setCustomVisionModel] = useState('');
   const [loading, setLoading] = useState(true);
   const [passwords, setPasswords] = useState({ current: "", new: "", confirm: "" });
   const [passStatus, setPassStatus] = useState({ type: "", message: "" });
@@ -74,52 +68,6 @@ export default function ProfilePage() {
   }, [langOpen]);
 
   useEffect(() => {
-    const fetchVisionModels = async () => {
-      try {
-        const [modelsRes, providersRes] = await Promise.all([
-          fetch("/api/models"),
-          fetch("/api/providers"),
-        ]);
-
-        const modelsData = modelsRes.ok ? await modelsRes.json() : { models: [] };
-        const providersData = providersRes.ok ? await providersRes.json() : { connections: [] };
-
-        // Connected provider IDs (from /api/providers connections)
-        const connectedProviderIds = new Set(
-          (providersData.connections || []).map(p => p.provider).filter(Boolean)
-        );
-
-        // Only show models from connected providers OR no-auth free providers
-        const visionModels = (modelsData.models || []).filter(m => m.caps?.vision &&
-          (connectedProviderIds.has(m.provider) || NO_AUTH_PROVIDER_IDS.includes(m.provider))
-        );
-
-        const groups = {};
-        for (const m of visionModels) {
-          const alias = m.provider || "other";
-          if (!groups[alias]) {
-            groups[alias] = { displayName: m.providerDisplayName || alias, models: [] };
-          }
-          groups[alias].models.push({ value: m.fullModel, label: (m.alias || m.model) + ' 👁' });
-        }
-        const options = [];
-        for (const alias of Object.keys(groups).sort()) {
-          options.push({ value: '__group__' + alias, label: '── ' + groups[alias].displayName + ' ──', disabled: true });
-          for (const m of groups[alias].models) {
-            options.push(m);
-          }
-        }
-        options.push({ value: '__custom__', label: '✒ Custom (nhập tay)...' });
-        setVisionModelOptions(options);
-      } catch (e) {
-        console.error('Failed to fetch vision models:', e);
-        setVisionModelOptions([{ value: "__custom__", label: "Custom (nhập tay)..." }]);
-      }
-    };
-
-    fetchVisionModels();
-  }, []);
-    useEffect(() => {
     fetch("/api/settings")
       .then((res) => res.json())
       .then((data) => {
@@ -349,38 +297,6 @@ export default function ProfilePage() {
       }
     } catch (err) {
       console.error("Failed to update combo sticky limit:", err);
-    }
-  };
-
-  
-  const updateVisionPreprocessingEnabled = async (visionPreprocessingEnabled) => {
-    try {
-      const res = await fetch('/api/settings', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ visionPreprocessingEnabled }),
-      });
-      if (res.ok) {
-        setSettings(prev => ({ ...prev, visionPreprocessingEnabled }));
-      }
-    } catch (err) {
-      console.error('Failed to update vision preprocessing:', err);
-    }
-  };
-
-  const updateVisionModel = async (model) => {
-    if (!model || !model.includes('/')) return;
-    try {
-      const res = await fetch('/api/settings', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ visionPreprocessingModel: model }),
-      });
-      if (res.ok) {
-        setSettings(prev => ({ ...prev, visionPreprocessingModel: model }));
-      }
-    } catch (err) {
-      console.error('Failed to update vision model:', err);
     }
   };
 
@@ -1140,96 +1056,7 @@ export default function ProfilePage() {
           </div>
         </Card>
 
-        {/* Vision Preprocessing */}
-        <Card>
-          <div className="flex items-center gap-3 mb-4">
-            <div className="p-2 rounded-lg bg-teal-500/10 text-teal-500 shrink-0">
-              <span className="material-symbols-outlined text-[20px]">visibility</span>
-            </div>
-            <h3 className="text-base sm:text-lg font-semibold">Vision Preprocessing</h3>
-          </div>
-          <div className="flex flex-col gap-4">
-            <div className="flex items-start sm:items-center justify-between gap-4">
-              <div className="flex-1 min-w-0">
-                <p className="font-medium text-sm sm:text-base">Auto Vision</p>
-                <p className="text-xs sm:text-sm text-text-muted">
-                  Tự độc ảnh bằng vision model trước khi gửi cho non-vision model
-                </p>
-              </div>
-              <Toggle
-                checked={settings.visionPreprocessingEnabled !== false}
-                onChange={() => updateVisionPreprocessingEnabled(settings.visionPreprocessingEnabled === false)}
-                disabled={loading}
-              />
-            </div>
-
-            {settings.visionPreprocessingEnabled !== false && (
-              <div className="flex flex-col gap-2 pt-2 border-t border-border/50">
-                <div className="flex-1 min-w-0">
-                  <p className="font-medium text-sm sm:text-base">Vision Model</p>
-                  <p className="text-xs sm:text-sm text-text-muted">
-                    Model đọc ảnh. Format: provider/model (VD: oc/mimo-v2.5-free)
-                  </p>
-                </div>
-                <div className="relative w-full sm:w-64">
-                  <select
-                    value={visionModelOptions.some(o => o.value === (settings.visionPreprocessingModel || 'oc/mimo-v2.5-free')) ? settings.visionPreprocessingModel || 'oc/mimo-v2.5-free' : '__custom__'}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      if (val.startsWith('__group__')) return;
-                      if (val === '__custom__') {
-                        setCustomVisionModel(settings.visionPreprocessingModel || '');
-                      } else {
-                        setCustomVisionModel('');
-                        updateVisionModel(val);
-                      }
-                    }}
-                    disabled={loading}
-                    className="w-full py-2.5 px-3 pr-10 text-sm text-text-main bg-surface-2 border border-transparent rounded-[10px] appearance-none focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500/40 transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed text-[16px] sm:text-sm"
-                  >
-                    <option value="" disabled>Chọn vision model...</option>
-                    {visionModelOptions.map((opt, i) => (
-                      <option
-                        key={i}
-                        value={opt.value}
-                        disabled={opt.disabled}
-                        style={opt.disabled ? { fontWeight: 'bold', color: 'var(--text-muted)', backgroundColor: 'var(--surface-1)' } : { paddingLeft: '1rem' }}
-                      >
-                        {opt.label}
-                      </option>
-                    ))}
-                  </select>
-                  <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none text-text-muted">
-                    <span className="material-symbols-outlined text-[20px]">expand_more</span>
-                  </div>
-                </div>
-                {!visionModelOptions.some(o => o.value === (settings.visionPreprocessingModel || 'oc/mimo-v2.5-free')) && customVisionModel !== null && (
-                  <Input
-                    type="text"
-                    value={customVisionModel || settings.visionPreprocessingModel || ''}
-                    onChange={(e) => setCustomVisionModel(e.target.value)}
-                    onBlur={() => {
-                      if (customVisionModel && customVisionModel.includes('/')) {
-                        updateVisionModel(customVisionModel);
-                      }
-                    }}
-                    disabled={loading}
-                    className="w-full sm:w-64"
-                    placeholder="provider/model"
-                  />
-                )}
-              </div>
-            )}
-
-            <p className="text-xs text-text-muted italic pt-2 border-t border-border/50">
-              {settings.visionPreprocessingEnabled !== false
-                ? 'Vision preprocessing enabled. Using ' + (settings.visionPreprocessingModel || 'oc/mimo-v2.5-free') + ' to read images before sending to chat models.'
-                : 'Vision preprocessing disabled. Images will be stripped with placeholder text for non-vision models.'}
-            </p>
-          </div>
-        </Card>
-
-                {/* Network */}
+        {/* Network */}
         <Card>
           <div className="flex items-center gap-3 mb-4">
             <div className="p-2 rounded-lg bg-purple-500/10 text-purple-500 shrink-0">
