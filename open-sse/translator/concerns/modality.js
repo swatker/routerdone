@@ -53,12 +53,16 @@ function isImageUrl(value) {
   return isImageDataUrl(value) || /^https?:\/\/\S+$/i.test(value);
 }
 
-function hasInvalidResponsesOutputImageUrl(body) {
-  return Array.isArray(body?.input) && body.input.some((item) =>
-    Array.isArray(item?.output) && item.output.some((b) =>
+function hasInvalidResponsesImageUrl(body) {
+  return Array.isArray(body?.input) && body.input.some((item) => {
+    const contentInvalid = Array.isArray(item?.content) && item.content.some((b) =>
+      b?.type === "input_image" && !isImageUrl(b.image_url)
+    );
+    const outputInvalid = Array.isArray(item?.output) && item.output.some((b) =>
       Object.hasOwn(b || {}, "image_url") && !isImageUrl(b.image_url)
-    )
-  );
+    );
+    return contentInvalid || outputInvalid;
+  });
 }
 
 function isResponsesFormat(sourceFormat) {
@@ -117,12 +121,18 @@ function stripResponses(body, caps) {
   body.input.forEach((item, i) => {
     if (Array.isArray(item.content)) {
       const removed = new Set();
+      let removedInvalidImage = false;
       item.content = item.content.filter((b) => {
         const cap = b?.type === "input_image" ? "vision" : b?.type === "input_file" ? "pdf" : null;
         if (cap && caps[cap] === false) { removed.add(cap); return false; }
+        if (b?.type === "input_image" && !isImageUrl(b.image_url)) {
+          removedInvalidImage = true;
+          return false;
+        }
         return true;
       });
       for (const cap of removed) item.content.push({ type: "input_text", text: ph(cap, i === last) });
+      if (removedInvalidImage) item.content.push({ type: "input_text", text: invalidImagePh(i === last) });
     }
 
     if (Array.isArray(item.output)) {
@@ -172,7 +182,7 @@ export function stripUnsupportedModalities(body, sourceFormat, caps) {
     caps.vision !== false &&
     caps.audioInput !== false &&
     caps.pdf !== false &&
-    !(isResponsesFormat(sourceFormat) && hasInvalidResponsesOutputImageUrl(body))
+    !(isResponsesFormat(sourceFormat) && hasInvalidResponsesImageUrl(body))
   ) return false;
 
   switch (sourceFormat) {

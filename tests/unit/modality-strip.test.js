@@ -118,6 +118,15 @@ describe("stripUnsupportedModalities", () => {
     expect(body.input[0].output.some((b) => b.type === "output_text" && /invalid image data/.test(b.text))).toBe(true);
   });
 
+  it("responses: strips invalid content image_url even when vision:true", () => {
+    const body = { input: [{ role: "user", content: [
+      { type: "input_image", image_url: "data:image/png;base64,invalid!" },
+    ] }] };
+    expect(stripUnsupportedModalities(body, FORMATS.OPENAI_RESPONSES, ALL)).toBe(true);
+    expect(body.input[0].content.some((b) => b.type === "input_image")).toBe(false);
+    expect(body.input[0].content.some((b) => b.type === "input_text" && /invalid image data/.test(b.text))).toBe(true);
+  });
+
   it("responses: keeps valid output image_url when vision:true", () => {
     const body = { input: [{ type: "message", output: [
       { type: "input_image", image_url: "data:image/png;base64,QUJD" },
