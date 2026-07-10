@@ -187,7 +187,7 @@ describe("adaptive combo fallback", () => {
 
   it("escalates the cooldown exponentially on consecutive failures, capped", async () => {
     const preflightFail = async () => new Response(
-      JSON.stringify({ error: { message: "upstream first productive timeout" } }),
+      JSON.stringify({ error: { message: "bad gateway" } }),
       { status: 502 },
     );
     const armOnce = () => handleComboChat({
@@ -231,7 +231,7 @@ describe("adaptive combo fallback", () => {
 
   it("resets the cooldown counter to base after one successful call", async () => {
     const preflightFail = async () => new Response(
-      JSON.stringify({ error: { message: "upstream first productive timeout" } }),
+      JSON.stringify({ error: { message: "bad gateway" } }),
       { status: 502 },
     );
     const arm = (fn) => handleComboChat({
@@ -264,7 +264,7 @@ describe("adaptive combo fallback", () => {
     vi.useFakeTimers();
     try {
       const preflightFail = async () => new Response(
-        JSON.stringify({ error: { message: "upstream first productive timeout" } }),
+        JSON.stringify({ error: { message: "bad gateway" } }),
         { status: 502 },
       );
       const arm = () => handleComboChat({
@@ -507,6 +507,9 @@ describe("retry-after parsing", () => {
 });
 
 describe("busy and connection cooldown classification", () => {
+  const log = { info: () => {}, warn: () => {}, debug: () => {} };
+  beforeEach(() => { resetComboCooldowns(); });
+
   it("classifies provider busy/concurrency text for short account cooldown", () => {
     for (const msg of [
       "Hệ thống đang bận, vui lòng thử lại",
