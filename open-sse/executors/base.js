@@ -3,6 +3,7 @@ import { shouldRefreshCredentials } from "../services/oauthCredentialManager.js"
 import { proxyAwareFetch } from "../utils/proxyFetch.js";
 import { dbg } from "../utils/debugLog.js";
 import { ANTHROPIC_API_VERSION, OPENAI_COMPAT_BASE, ANTHROPIC_COMPAT_BASE } from "../providers/shared.js";
+import { normalizeConnectionBaseUrl } from "../services/provider.js";
 
 /**
  * BaseExecutor - Base class for provider executors
@@ -29,7 +30,7 @@ export class BaseExecutor {
   buildUrl(model, stream, urlIndex = 0, credentials = null) {
     if (this.provider?.startsWith?.("openai-compatible-")) {
       const baseUrl = credentials?.providerSpecificData?.baseUrl || OPENAI_COMPAT_BASE;
-      const normalized = baseUrl.replace(/\/$/, "");
+      const normalized = normalizeConnectionBaseUrl(baseUrl, credentials);
       const apiType = credentials?.providerSpecificData?.apiType;
       const path = apiType === "responses" || (!apiType && this.provider.includes("responses")) ? "/responses" : "/chat/completions";
       return `${normalized}${path}`;

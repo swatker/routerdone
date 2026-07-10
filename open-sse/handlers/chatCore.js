@@ -1,4 +1,5 @@
 import { detectFormat, getTargetFormat, resolveTransport } from "../services/provider.js";
+import { normalizeLmstudioMessages } from "../services/runtimeProfile.js";
 import { translateRequest } from "../translator/index.js";
 import { FORMATS } from "../translator/formats.js";
 import { normalizeClaudePassthrough } from "../translator/formats/claude.js";
@@ -43,11 +44,12 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   const { provider, model } = modelInfo;
   const requestStartTime = Date.now();
   const routeMode = routeInfo?.routeMode || (routeInfo?.comboName ? "combo" : "direct");
-  const resolvedStreamPolicy = resolveRoutePolicy(routeMode, { stream: streamTimeoutPolicy, streamPreflightTimeoutMs }).stream;
+  const resolvedStreamPolicy = resolveRoutePolicy(routeMode, { stream: streamTimeoutPolicy, streamPreflightTimeoutMs, providerSpecificData: credentials?.providerSpecificData }).stream;
   const headersDeadlineMs = routeMode === "direct"
     ? null
     : (resolvedStreamPolicy.firstByteTimeoutMs || 3000) + (resolvedStreamPolicy.firstProductiveTimeoutMs || 8000);
 
+  body = normalizeLmstudioMessages(body, credentials?.providerSpecificData);
   const sourceFormat = sourceFormatOverride || detectFormat(body);
 
   // Check for bypass patterns (warmup, skip, cc naming)

@@ -9,6 +9,7 @@ import {
 import { cacheClaudeHeaders } from "open-sse/utils/claudeHeaderCache.js";
 import { getSettings, getApiKeyByRawKey } from "@/lib/localDb";
 import { getModelInfo, getComboModels } from "../services/model.js";
+import { classifyModelRoute, isAutoRouteFailure } from "open-sse/services/modelRouting.js";
 import { checkModelAllowed, checkKeyQuota } from "../services/keyPolicy.js";
 import { handleChatCore } from "open-sse/handlers/chatCore.js";
 import { DEFAULT_HEADROOM_URL } from "@/lib/headroom/detect";
@@ -214,7 +215,16 @@ export async function handleChat(request, clientRawRequest = null) {
  * Handle single model chat request
  */
 async function handleSingleModelChat(body, modelStr, clientRawRequest = null, request = null, apiKey = null, attemptContext = {}) {
-  const modelInfo = await getModelInfo(modelStr);
+  // Auto routing is opt-in; explicit model/combo requests bypass classification unchanged.
+  const route = classifyModelRoute(modelStr, {
+    auto: attemptContext.autoRoute === true,
+    body,
+    localModel: attemptContext.localModel,
+    strongModel: attemptContext.strongModel,
+    explicitModel: modelStr !== "auto" ? modelStr : "",
+  });
+  const selectedModel = route.model || modelStr;
+  const modelInfo = await getModelInfo(selectedModel);
 
   // If provider is null, this might be a combo name - check and handle
   if (!modelInfo.provider) {
@@ -384,6 +394,19 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
     });
 
     if (result.success) return result.response;
+
+    // Local auto-route failure → one-way strong fallback; never downgrade strong → local.
+    if (route.mode === "local" && route.fallbackModel && isAutoRouteFailure(result.status)) {
+      log.warn("ROUTING", `Local route failed (${result.status}), falling back to ${route.fallbackModel}`);
+      return handleSingleModelChat(
+        { ...body, model: route.fallbackModel },
+        route.fallbackModel,
+        clientRawRequest,
+        request,
+        apiKey,
+        { ...attemptContext, autoRoute: false, localModel: null, strongModel: null }
+      );
+    }
 
     // Mark account unavailable (auto-calculates cooldown with exponential backoff, or precise resetsAtMs)
     const { shouldFallback } = await markAccountUnavailable(credentials.connectionId, result.status, result.error, provider, model, result.resetsAtMs);
