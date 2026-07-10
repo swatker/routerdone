@@ -2,6 +2,7 @@
 // Driven by getCapabilitiesForModel: vision/audioInput/pdf. Replaces removed
 // media with a short text placeholder so messages never become empty.
 import { FORMATS } from "../formats.js";
+import { isValidImageDataUri } from "./image.js";
 
 // Placeholder text inserted where a media block was removed.
 // Current turn: explain the active model can't read what the user just sent.
@@ -38,19 +39,8 @@ function capForOpenAIBlock(block) {
   return null;
 }
 
-function isImageDataUrl(value) {
-  if (typeof value !== "string") return false;
-  const match = value.match(/^data:image\/[a-z0-9.+-]+;base64,([A-Za-z0-9+/]*={0,2})$/i);
-  if (!match || match[1].length === 0 || match[1].length % 4 === 1) return false;
-  try {
-    return Buffer.from(match[1], "base64").length > 0;
-  } catch {
-    return false;
-  }
-}
-
 function isImageUrl(value) {
-  return isImageDataUrl(value) || /^https?:\/\/\S+$/i.test(value);
+  return isValidImageDataUri(value) || /^https?:\/\/\S+$/i.test(value);
 }
 
 function hasInvalidResponsesImageUrl(body) {
@@ -99,7 +89,21 @@ function stripOpenAI(body, caps) {
   body.messages.forEach((msg, i) => {
     if (!Array.isArray(msg.content)) return;
     const removed = new Set();
-    msg.content = filterBlocks(msg.content, capForOpenAIBlock, caps, removed, i === last);
+    let removedInvalidImage = false;
+    msg.content = msg.content.filter((block) => {
+      const cap = capForOpenAIBlock(block);
+      if (cap && caps[cap] === false) { removed.add(cap); return false; }
+      if (block?.type === "image_url") {
+        const url = typeof block.image_url === "string" ? block.image_url : block.image_url?.url;
+        if (typeof url === "string" && url.startsWith("data:") && !isValidImageDataUri(url)) {
+          removedInvalidImage = true;
+          return false;
+        }
+      }
+      return true;
+    });
+    for (const cap of removed) msg.content.push({ type: "text", text: ph(cap, i === last) });
+    if (removedInvalidImage) msg.content.push({ type: "text", text: invalidImagePh(i === last) });
   });
 }
 
