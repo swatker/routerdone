@@ -40,6 +40,12 @@ const DEFAULT_SETTINGS = {
   contextGuardMaxBytes: 240_000,
   contextGuardKeepRecent: 3,
   contextGuardHardCapTokens: 0,
+  routerDoneContextBackup: {
+    enabled: false,
+    thresholdTokens: 45000,
+    retainRecentTurns: 3,
+    codexConnectionId: "",
+  },
   consoleLogRetentionMs: 60 * 60 * 1000,
   modelRedirects: {
     "gpt-5.4-mini": "helper.fallback",

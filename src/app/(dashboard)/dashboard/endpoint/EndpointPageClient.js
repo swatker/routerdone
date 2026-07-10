@@ -47,6 +47,7 @@ export default function APIPageClient({ machineId }) {
   const [cavemanLevel, setCavemanLevel] = useState("full");
   const [ponytailEnabled, setPonytailEnabled] = useState(false);
   const [ponytailLevel, setPonytailLevel] = useState("full");
+  const [contextBackup, setContextBackup] = useState({ enabled: false, thresholdTokens: 45000, retainRecentTurns: 3, codexConnectionId: "" });
   const [locale, setLocale] = useState("en");
 
   // Cloudflare Tunnel state
@@ -252,6 +253,7 @@ export default function APIPageClient({ machineId }) {
         setCavemanLevel(data.cavemanLevel || "full");
         setPonytailEnabled(!!data.ponytailEnabled);
         setPonytailLevel(data.ponytailLevel || "full");
+        setContextBackup(data.routerDoneContextBackup || { enabled: false, thresholdTokens: 45000, retainRecentTurns: 3, codexConnectionId: "" });
       }
       if (statusRes.ok) {
         const data = await statusRes.json();
@@ -1336,6 +1338,21 @@ export default function APIPageClient({ machineId }) {
             disabled={!headroomRunning}
             onChange={() => handleHeadroomEnabled(!headroomEnabled)}
           />
+        </div>
+        <div className="flex items-center justify-between pt-4 border-t border-border gap-4 flex-wrap">
+          <div className="min-w-0 flex-1">
+            <p className="font-medium">RouterDone context summary backup</p>
+            <p className="text-sm text-text-muted mt-1">Optional context-summary backup for any target; enable only when needed.</p>
+            {contextBackup.enabled && (
+              <div className="mt-3 flex gap-2 flex-wrap items-center">
+                <label className="text-xs text-text-muted">Compact from</label>
+                <Input type="number" min="36000" step="1" value={contextBackup.thresholdTokens} onChange={(e) => setContextBackup((v) => ({ ...v, thresholdTokens: e.target.value }))} onBlur={() => patchSetting({ routerDoneContextBackup: { ...contextBackup, thresholdTokens: Number(contextBackup.thresholdTokens) } })} className="w-32" />
+                <label className="text-xs text-text-muted">tokens; keep turns</label>
+                <Input type="number" min="1" value={contextBackup.retainRecentTurns} onChange={(e) => setContextBackup((v) => ({ ...v, retainRecentTurns: e.target.value }))} onBlur={() => patchSetting({ routerDoneContextBackup: { ...contextBackup, retainRecentTurns: Number(contextBackup.retainRecentTurns) } })} className="w-20" />
+              </div>
+            )}
+          </div>
+          <Toggle checked={contextBackup.enabled} onChange={() => { const next = { ...contextBackup, enabled: !contextBackup.enabled }; setContextBackup(next); patchSetting({ routerDoneContextBackup: next }); }} />
         </div>
         <div className="flex items-center justify-between pt-4 gap-4 flex-wrap">
           <div className="min-w-0 flex-1">

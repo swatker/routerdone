@@ -50,6 +50,24 @@ export async function PATCH(request) {
       body.consoleLogRetentionMs = value;
     }
 
+    if (Object.prototype.hasOwnProperty.call(body, "routerDoneContextBackup")) {
+      const cfg = body.routerDoneContextBackup;
+      if (!cfg || typeof cfg !== "object" || Array.isArray(cfg)) {
+        return NextResponse.json({ error: "Invalid context backup settings" }, { status: 400 });
+      }
+      const threshold = Number(cfg.thresholdTokens ?? 45000);
+      const retain = Number(cfg.retainRecentTurns ?? 3);
+      if (typeof cfg.enabled !== "boolean" || !Number.isSafeInteger(threshold) || threshold < 36000 || !Number.isInteger(retain) || retain < 1 || retain > 6 || (cfg.codexConnectionId !== undefined && typeof cfg.codexConnectionId !== "string")) {
+        return NextResponse.json({ error: "Invalid context backup settings" }, { status: 400 });
+      }
+      body.routerDoneContextBackup = {
+        enabled: cfg.enabled,
+        thresholdTokens: threshold,
+        retainRecentTurns: retain,
+        codexConnectionId: cfg.codexConnectionId || "",
+      };
+    }
+
     // If updating password, hash it
     if (body.newPassword) {
       const settings = await getSettings();

@@ -18,6 +18,25 @@ import { handleComboChat, handleFusionChat } from "open-sse/services/combo.js";
 import { handleBypassRequest } from "open-sse/utils/bypassHandler.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
 import { resolveRoutePolicy } from "open-sse/services/routePolicy.js";
+import { buildContextSummaryBackup, isContextBackupEligible, normalizeContextBackupConfig } from "../services/contextSummaryBackup.js";
+
+function estimateBackupTokens(body) {
+  return Math.ceil(JSON.stringify(body?.input || []).length / 4);
+}
+
+function applyContextSummaryBackup(body, settings, request, connectionId) {
+  let config;
+  try { config = normalizeContextBackupConfig(settings?.routerDoneContextBackup); } catch { return body; }
+  const pathname = new URL(request.url).pathname;
+  const isResponses = pathname === "/v1/responses" || pathname === "/api/v1/responses";
+  if (!config.enabled || !isContextBackupEligible(body, { isResponses })) return body;
+  if (estimateBackupTokens(body) < config.thresholdTokens) return body;
+  return buildContextSummaryBackup(body, config) || body;
+}
+
+function maybeBackupBody(body, settings, request) {
+  return applyContextSummaryBackup(body, settings, request, null);
+}
 
 const MODEL_REDIRECTS = new Map([
   ["gpt-5.4-mini", "helper.fallback"],
@@ -157,6 +176,7 @@ export async function handleChat(request, clientRawRequest = null) {
 
   // Check if model is a combo (has multiple models with fallback)
   const comboModels = await getComboModels(modelStr);
+  body = maybeBackupBody(body, settings, request);
   if (comboModels) {
     // Check for combo-specific strategy first, fallback to global
     const comboStrategies = settings.comboStrategies || {};
