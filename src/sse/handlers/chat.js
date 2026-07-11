@@ -59,6 +59,20 @@ function resolveModelRedirect(modelStr, settings) {
   }
   return MODEL_REDIRECTS.get(modelStr) || null;
 }
+
+// Resolve capabilities of the configured vision preprocessing model so the
+// preprocessor can pick a reasoning-aware timeout. Best-effort: returns null on
+// any failure (preprocessor then uses the default timeout).
+async function resolveVisionModelCaps(settings) {
+  try {
+    const visionModel = settings?.visionPreprocessingModel || "oc/mimo-v2.5-free";
+    const info = await getModelInfo(visionModel);
+    if (!info?.provider) return null;
+    return getCapabilitiesForModel(info.provider, info.model);
+  } catch {
+    return null;
+  }
+}
 import { detectFormatByEndpoint } from "open-sse/translator/formats.js";
 import * as log from "../utils/logger.js";
 import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.js";
@@ -213,7 +227,10 @@ export async function handleChat(request, clientRawRequest = null) {
           getComboModels,
           getCapabilitiesForModel,
         });
-        const preprocessed = await preprocessVisionContent(body, settings, log, targetCaps);
+        const preprocessed = await preprocessVisionContent(body, settings, log, targetCaps, {
+          apiKey,
+          visionCaps: await resolveVisionModelCaps(settings),
+        });
         if (preprocessed) {
           body = preprocessed;
           log.info("VISION", "Images preprocessed for combo/direct model: " + modelStr);
@@ -278,7 +295,10 @@ export async function handleChat(request, clientRawRequest = null) {
               : null;
             if (attemptCaps?.vision !== true) {
               attemptBody = structuredClone(b);
-              const preprocessed = await preprocessVisionContent(attemptBody, settings, log, attemptCaps);
+              const preprocessed = await preprocessVisionContent(attemptBody, settings, log, attemptCaps, {
+                apiKey,
+                visionCaps: await resolveVisionModelCaps(settings),
+              });
               if (preprocessed) {
                 attemptBody = preprocessed;
                 log.info("VISION", "Images lazily preprocessed for combo fallback model: " + m);

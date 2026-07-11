@@ -25,6 +25,15 @@ import { createHash } from "node:crypto";
 
 const VISION_MODEL_DEFAULT = "oc/mimo-v2.5-free";
 const VISION_TIMEOUT_MS = 30000;
+// Reasoning-capable vision models can spend their budget on a thinking pass
+// before emitting the description, so give them a longer ceiling (matches the
+// combo reasoning stream tier). Used only when the resolved vision model caps
+// declare reasoning: true.
+const VISION_REASONING_TIMEOUT_MS = 60000;
+// One retry on a failed/empty vision call — mimo is fast (3-8s measured), so a
+// single retry cheaply recovers transient upstream/network blips before we fall
+// back to a placeholder.
+const VISION_MAX_ATTEMPTS = 2;
 const VISION_INSTRUCTION_VERSION = "v1";
 const VISION_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const VISION_CACHE_MAX_ENTRIES = 500;
@@ -401,7 +410,50 @@ function stripImagesFromMessage(msg, placeholder) {
   return { ...msg, content: trimmed };
 }
 
-export async function preprocessVisionContent(body, settings, log, targetCaps) {
+// Perform the vision loopback call once. Returns { ok, data } on a usable
+// response, or { ok:false } on HTTP error / timeout / parse failure so the
+// caller can decide whether to retry.
+async function callVisionOnce(apiUrl, visionBody, timeoutMs, authKey, visionModel, log) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const headers = { "Content-Type": "application/json" };
+    // Forward an API key so the loopback survives deployments with
+    // requireApiKey=true. Without this, an enabled auth gate turns every image
+    // request into a silent 401 -> placeholder. Default RouterDone keys are
+    // unrestricted, so reusing the caller's key is safe for routing.
+    if (authKey) headers.Authorization = "Bearer " + authKey;
+    const response = await fetch(apiUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(visionBody),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const errText = await response.text().catch(() => "");
+      log?.warn?.("VISION", "Vision model HTTP " + response.status + ": " + errText.slice(0, 200));
+      return { ok: false };
+    }
+    const data = await readVisionResponse(response, visionModel);
+    const text = extractVisionText(data);
+    if (!text || !text.trim()) {
+      log?.warn?.("VISION", "Vision model returned empty content");
+      return { ok: false };
+    }
+    return { ok: true, text };
+  } catch (error) {
+    if (error.name === "AbortError") {
+      log?.warn?.("VISION", "Vision request timed out after " + timeoutMs + "ms");
+    } else {
+      log?.warn?.("VISION", "Vision fetch error: " + error.message);
+    }
+    return { ok: false };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export async function preprocessVisionContent(body, settings, log, targetCaps, opts = {}) {
   if (!hasImageContent(body)) return null;
 
   // Skip if the *target* model already supports vision natively — preprocessing
@@ -447,17 +499,41 @@ export async function preprocessVisionContent(body, settings, log, targetCaps) {
     return null;
   }
 
-  // Strip images from ALL older messages (no vision call needed)
+  // Older messages: don't blindly discard their images. If an image was OCR'd
+  // in a previous turn its description is already cached (keyed by image content
+  // hash), so restore that text instead of dropping the context. Only fall back
+  // to a bare strip on a cache miss — we never make a vision call for old images.
   let strippedCount = 0;
+  let restoredCount = 0;
   for (let mi = 0; mi < messages.length; mi++) {
     if (mi === lastUserIdx) continue;
     const msg = messages[mi];
     if (!Array.isArray(msg.content)) continue;
     const hasImgs = msg.content.some(b => b?.type === "image_url" || b?.type === "image");
-    if (hasImgs) {
+    if (!hasImgs) continue;
+
+    let restored = false;
+    try {
+      const oldBlocks = await extractImagesFromMessage(msg, log);
+      if (oldBlocks.length) {
+        const oldKey = buildVisionCacheKey(visionModel, oldBlocks);
+        const oldCached = getCachedVisionDescription(oldKey);
+        if (oldCached) {
+          messages[mi] = stripImagesFromMessage(msg, "[Image description: " + oldCached + "]");
+          restoredCount++;
+          restored = true;
+        }
+      }
+    } catch (e) {
+      log?.warn?.("VISION", "Old-image cache lookup failed (non-fatal): " + e.message);
+    }
+    if (!restored) {
       messages[mi] = stripImagesFromMessage(msg);
       strippedCount++;
     }
+  }
+  if (restoredCount > 0) {
+    log?.info?.("VISION", "Restored cached description for " + restoredCount + " older message(s)");
   }
   if (strippedCount > 0) {
     log?.info?.("VISION", "Stripped images from " + strippedCount + " older message(s)");
@@ -501,51 +577,32 @@ export async function preprocessVisionContent(body, settings, log, targetCaps) {
   // Call vision model via self-loopback
   const port = process.env.PORT || 20128;
   const apiUrl = "http://127.0.0.1:" + port + "/api/v1/chat/completions";
-  log?.info?.("VISION", "Calling vision model " + visionModel + " via self-loopback");
 
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), VISION_TIMEOUT_MS);
+  // Dynamic timeout: reasoning-capable vision models get a longer ceiling.
+  const visionCaps = opts.visionCaps || null;
+  const timeoutMs = visionCaps?.reasoning === true ? VISION_REASONING_TIMEOUT_MS : VISION_TIMEOUT_MS;
+  const authKey = opts.apiKey || null;
 
-    const response = await fetch(apiUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(visionBody),
-      signal: controller.signal,
-    });
+  log?.info?.("VISION", "Calling vision model " + visionModel + " via self-loopback (timeout=" + timeoutMs + "ms)");
 
-    clearTimeout(timeout);
-    log?.info?.("VISION", "Vision model response: " + response.status);
-
-    if (!response.ok) {
-      const errText = await response.text().catch(() => "");
-      console.log("[VISION] Error response: " + errText.slice(0, 500));
-      messages[lastUserIdx] = stripImagesFromMessage(lastMsg, "[Image -- vision model failed to describe]");
-      return body;
+  // Try once, then retry once on failure/empty before giving up to a placeholder.
+  let visionText = null;
+  for (let attempt = 1; attempt <= VISION_MAX_ATTEMPTS; attempt++) {
+    const res = await callVisionOnce(apiUrl, visionBody, timeoutMs, authKey, visionModel, log);
+    if (res.ok) { visionText = res.text; break; }
+    if (attempt < VISION_MAX_ATTEMPTS) {
+      log?.info?.("VISION", "Retry vision call (attempt " + (attempt + 1) + "/" + VISION_MAX_ATTEMPTS + ")");
     }
+  }
 
-    const data = await readVisionResponse(response, visionModel);
-    const visionText = extractVisionText(data);
-
-    if (!visionText || !visionText.trim()) {
-      console.log("[VISION] Empty content. Response: " + JSON.stringify(data).slice(0, 500));
-      messages[lastUserIdx] = stripImagesFromMessage(lastMsg, "[Image -- vision model returned empty]");
-      return body;
-    }
-
-    setCachedVisionDescription(cacheKey, visionText);
-    log?.info?.("VISION", "Got " + visionText.length + " chars from vision model");
-    messages[lastUserIdx] = stripImagesFromMessage(lastMsg, "[Image description: " + visionText + "]");
-    log?.info?.("VISION", "Images replaced with description in last message");
-    return body;
-
-  } catch (error) {
-    if (error.name === "AbortError") {
-      log?.warn?.("VISION", "Request timed out after " + VISION_TIMEOUT_MS + "ms");
-    } else {
-      console.log("[VISION] Fetch error: " + error.message);
-    }
-    messages[lastUserIdx] = stripImagesFromMessage(lastMsg, "[Image -- vision preprocessing error]");
+  if (!visionText) {
+    messages[lastUserIdx] = stripImagesFromMessage(lastMsg, "[Image -- vision model failed to describe]");
     return body;
   }
+
+  setCachedVisionDescription(cacheKey, visionText);
+  log?.info?.("VISION", "Got " + visionText.length + " chars from vision model");
+  messages[lastUserIdx] = stripImagesFromMessage(lastMsg, "[Image description: " + visionText + "]");
+  log?.info?.("VISION", "Images replaced with description in last message");
+  return body;
 }

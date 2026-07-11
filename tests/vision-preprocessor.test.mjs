@@ -467,3 +467,180 @@ test("cache: same image but different vision model misses cache", async () => {
     clearVisionDescriptionCache();
   }
 });
+
+// ── P1: loopback forwards API key so requireApiKey=true deployments still work ──
+
+test("P1: loopback forwards Authorization header when opts.apiKey provided", async () => {
+  clearVisionDescriptionCache();
+  let seenAuth = null;
+  const fakeFetch = (_url, opts) => {
+    seenAuth = opts.headers?.Authorization || null;
+    return Promise.resolve({
+      ok: true,
+      headers: { get: () => "application/json" },
+      json: () => Promise.resolve({ choices: [{ message: { content: "desc" } }] }),
+    });
+  };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = fakeFetch;
+  try {
+    const settings = { visionPreprocessingEnabled: true, visionPreprocessingModel: "oc/mimo-v2.5-free" };
+    const body = {
+      model: "oc/glm-5.1", stream: false,
+      messages: [{ role: "user", content: [
+        { type: "text", text: "what is this?" },
+        { type: "image_url", image_url: { url: FAKE_IMG } },
+      ] }],
+    };
+    await preprocessVisionContent(body, settings, noLog, { vision: false }, { apiKey: "sk-test-key" });
+    assert.equal(seenAuth, "Bearer sk-test-key", "loopback must forward the caller's API key");
+  } finally {
+    globalThis.fetch = originalFetch;
+    clearVisionDescriptionCache();
+  }
+});
+
+test("P1: no Authorization header when opts.apiKey absent (local mode unchanged)", async () => {
+  clearVisionDescriptionCache();
+  let hadAuth = "unset";
+  const fakeFetch = (_url, opts) => {
+    hadAuth = "Authorization" in (opts.headers || {});
+    return Promise.resolve({
+      ok: true,
+      headers: { get: () => "application/json" },
+      json: () => Promise.resolve({ choices: [{ message: { content: "desc" } }] }),
+    });
+  };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = fakeFetch;
+  try {
+    const settings = { visionPreprocessingEnabled: true, visionPreprocessingModel: "oc/mimo-v2.5-free" };
+    const body = {
+      model: "oc/glm-5.1", stream: false,
+      messages: [{ role: "user", content: [
+        { type: "text", text: "what is this?" },
+        { type: "image_url", image_url: { url: FAKE_IMG } },
+      ] }],
+    };
+    await preprocessVisionContent(body, settings, noLog, { vision: false });
+    assert.equal(hadAuth, false, "no API key -> no Authorization header (backward compatible)");
+  } finally {
+    globalThis.fetch = originalFetch;
+    clearVisionDescriptionCache();
+  }
+});
+
+// ── P2: retry once on a failed vision call before giving up ────────────────────
+
+test("P2: retries once when first vision call fails, succeeds on second", async () => {
+  clearVisionDescriptionCache();
+  let n = 0;
+  const fakeFetch = () => {
+    n++;
+    if (n === 1) return Promise.resolve({ ok: false, status: 502, text: () => Promise.resolve("bad gateway") });
+    return Promise.resolve({
+      ok: true,
+      headers: { get: () => "application/json" },
+      json: () => Promise.resolve({ choices: [{ message: { content: "recovered on retry" } }] }),
+    });
+  };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = fakeFetch;
+  try {
+    const settings = { visionPreprocessingEnabled: true, visionPreprocessingModel: "oc/mimo-v2.5-free" };
+    const body = {
+      model: "oc/glm-5.1", stream: false,
+      messages: [{ role: "user", content: [
+        { type: "text", text: "what is this?" },
+        { type: "image_url", image_url: { url: FAKE_IMG } },
+      ] }],
+    };
+    const result = await preprocessVisionContent(body, settings, noLog, { vision: false });
+    assert.equal(n, 2, "must retry once after the first failure");
+    assert.match(JSON.stringify(result.messages[0].content), /recovered on retry/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    clearVisionDescriptionCache();
+  }
+});
+
+test("P2: gives up to placeholder after both attempts fail", async () => {
+  clearVisionDescriptionCache();
+  let n = 0;
+  const fakeFetch = () => { n++; return Promise.resolve({ ok: false, status: 500, text: () => Promise.resolve("err") }); };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = fakeFetch;
+  try {
+    const settings = { visionPreprocessingEnabled: true, visionPreprocessingModel: "oc/mimo-v2.5-free" };
+    const body = {
+      model: "oc/glm-5.1", stream: false,
+      messages: [{ role: "user", content: [
+        { type: "text", text: "what is this?" },
+        { type: "image_url", image_url: { url: FAKE_IMG } },
+      ] }],
+    };
+    const result = await preprocessVisionContent(body, settings, noLog, { vision: false });
+    assert.equal(n, 2, "must attempt exactly twice (1 try + 1 retry)");
+    assert.ok(result, "non-fatal: returns body with placeholder, not null");
+    assert.match(JSON.stringify(result.messages[0].content), /vision model failed/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    clearVisionDescriptionCache();
+  }
+});
+
+// ── P3: old-message images restore cached description instead of being dropped ──
+
+test("P3: older-message image restores cached description (no extra vision call)", async () => {
+  clearVisionDescriptionCache();
+  let calls = 0;
+  const fakeFetch = () => {
+    calls++;
+    return Promise.resolve({
+      ok: true,
+      headers: { get: () => "application/json" },
+      json: () => Promise.resolve({ choices: [{ message: { content: "OCR of first image" } }] }),
+    });
+  };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = fakeFetch;
+  try {
+    const settings = { visionPreprocessingEnabled: true, visionPreprocessingModel: "oc/mimo-v2.5-free" };
+    // Turn 1: single image in the last user message -> caches its description.
+    const turn1 = {
+      model: "oc/glm-5.1", stream: false,
+      messages: [{ role: "user", content: [
+        { type: "text", text: "what is this?" },
+        { type: "image_url", image_url: { url: FAKE_IMG } },
+      ] }],
+    };
+    await preprocessVisionContent(turn1, settings, noLog, { vision: false });
+    assert.equal(calls, 1, "turn 1 calls vision once");
+
+    // Turn 2: the same image is now an OLDER message; a NEW image is last.
+    const turn2 = {
+      model: "oc/glm-5.1", stream: false,
+      messages: [
+        { role: "user", content: [
+          { type: "text", text: "what is this?" },
+          { type: "image_url", image_url: { url: FAKE_IMG } },
+        ] },
+        { role: "assistant", content: "It's the first image." },
+        { role: "user", content: [
+          { type: "text", text: "and this one?" },
+          { type: "image_url", image_url: { url: FAKE_IMG_B } },
+        ] },
+      ],
+    };
+    const result = await preprocessVisionContent(turn2, settings, noLog, { vision: false });
+    // Old image (FAKE_IMG) is cached -> restored WITHOUT a new call; only the new
+    // last image (FAKE_IMG_B) triggers a vision call.
+    assert.equal(calls, 2, "only the new last-message image triggers a vision call");
+    const oldMsg = JSON.stringify(result.messages[0].content);
+    assert.match(oldMsg, /OCR of first image/, "older image keeps its cached description instead of being dropped");
+  } finally {
+    globalThis.fetch = originalFetch;
+    clearVisionDescriptionCache();
+  }
+});
+
