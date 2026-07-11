@@ -24,8 +24,8 @@ import { dedupeTools } from "../utils/toolDeduper.js";
 import { injectCaveman } from "../rtk/caveman.js";
 import { injectPonytail } from "../rtk/ponytail.js";
 import { compressMessages, formatRtkLog } from "../rtk/index.js";
-import { guardContext, formatContextGuardLog, estimateInputTokens, pruneContextToHardCap, formatHardCapPruneLog, sanitizeTrimmedMediaBlocks } from "../rtk/contextGuard.js";
-import { compressWithHeadroom, formatHeadroomSizeLog, isHeadroomPhantomSavings } from "../rtk/headroom.js";
+import { guardContext, formatContextGuardLog, estimateInputTokens, pruneContextToHardCap, formatHardCapPruneLog } from "../rtk/contextGuard.js";
+import { compressWithHeadroom, formatHeadroomSizeLog, isHeadroomPhantomSavings, resolveHeadroomDecision } from "../rtk/headroom.js";
 import { getCapabilitiesForModel } from "../providers/capabilities.js";
 import { stripUnsupportedModalities } from "../translator/concerns/modality.js";
 import { prefetchRemoteImages } from "../translator/concerns/prefetch.js";
@@ -40,7 +40,7 @@ const DEFAULT_CONTEXT_GUARD_KEEP_RECENT = Math.max(1, Number(process.env.CONTEXT
  * @param {object} options.credentials - Provider credentials
  * @param {string} options.sourceFormatOverride - Override detected source format (e.g. "openai-responses")
  */
-export async function handleChatCore({ body, modelInfo, credentials, log, onCredentialsRefreshed, onRequestSuccess, onDisconnect, clientRawRequest, connectionId, userAgent, apiKey, ccFilterNaming, rtkEnabled, headroomEnabled, headroomUrl, headroomCompressUserMessages, cavemanEnabled, cavemanLevel, ponytailEnabled, ponytailLevel, contextGuardEnabled, contextGuardMaxBytes, contextGuardKeepRecent, contextGuardHardCapTokens, sourceFormatOverride, providerThinking, routeInfo = null, streamTimeoutPolicy = null, streamPreflightTimeoutMs = null }) {
+export async function handleChatCore({ body, modelInfo, credentials, log, onCredentialsRefreshed, onRequestSuccess, onDisconnect, clientRawRequest, connectionId, userAgent, apiKey, ccFilterNaming, rtkEnabled, headroomEnabled, headroomUrl, headroomCompressUserMessages, headroomAdaptive, cavemanEnabled, cavemanLevel, ponytailEnabled, ponytailLevel, contextGuardEnabled, contextGuardMaxBytes, contextGuardKeepRecent, contextGuardHardCapTokens, sourceFormatOverride, providerThinking, routeInfo = null, streamTimeoutPolicy = null, streamPreflightTimeoutMs = null }) {
   const { provider, model } = modelInfo;
   const requestStartTime = Date.now();
   const routeMode = routeInfo?.routeMode || (routeInfo?.comboName ? "combo" : "direct");
@@ -211,13 +211,25 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   const ctxGuardLine = formatContextGuardLog(ctxGuardStats);
   if (ctxGuardLine) console.log(ctxGuardLine);
 
-  // Headroom: optional external proxy compression; fail open if proxy is absent.
+  // Headroom: adaptive external compression; small requests bypass the extra network hop.
   const headroomDiagnostics = {};
-  const headroomStats = await compressWithHeadroom(translatedBody, { enabled: headroomEnabled, url: headroomUrl, model: upstreamModel, format: finalFormat, compressUserMessages: headroomCompressUserMessages, diagnostics: headroomDiagnostics });
+  const headroomDecision = resolveHeadroomDecision({
+    estimatedTokens: estimateInputTokens(translatedBody, upstreamModel),
+    hardCapTokens,
+    config: { ...(headroomAdaptive || {}), enabled: headroomEnabled && headroomAdaptive?.enabled !== false },
+    isCompact,
+  });
+  headroomDiagnostics.decision = headroomDecision.mode;
+  headroomDiagnostics.ratioPercent = Math.round(headroomDecision.ratioPercent * 10) / 10;
+  const headroomStats = headroomDecision.mode === "bypass"
+    ? null
+    : await compressWithHeadroom(translatedBody, { enabled: true, url: headroomUrl, model: upstreamModel, format: finalFormat, compressUserMessages: headroomCompressUserMessages, timeoutMs: headroomDecision.timeoutMs, diagnostics: headroomDiagnostics });
   const headroomLine = formatHeadroomSizeLog(headroomStats, headroomDiagnostics);
   if (headroomLine) log?.info?.("HEADROOM", headroomLine);
-  if (!headroomStats && headroomEnabled && headroomDiagnostics.reason) {
-    log?.warn?.("HEADROOM", `skipped: ${headroomDiagnostics.reason}`);
+  if (headroomDecision.mode === "bypass") {
+    log?.debug?.("HEADROOM", `bypassed: ${headroomDecision.reason} | ratio=${headroomDiagnostics.ratioPercent}%`);
+  } else if (!headroomStats && headroomEnabled && headroomDiagnostics.reason) {
+    log?.warn?.("HEADROOM", `fallback: ${headroomDiagnostics.reason} | mode=${headroomDecision.mode}`);
   }
   if (isHeadroomPhantomSavings(headroomStats, headroomDiagnostics)) {
     log?.warn?.("HEADROOM", "reported token delta, but outbound JSON shrank <5%; provider may bill near-original payload");
