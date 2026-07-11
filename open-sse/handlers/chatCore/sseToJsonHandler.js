@@ -180,7 +180,7 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, pr
       const totalLatency = Date.now() - requestStartTime;
       const latency = { ttft: totalLatency, total: totalLatency };
       const normalizedUsage = { prompt_tokens: usage.input_tokens || 0, completion_tokens: usage.output_tokens || 0 };
-      logChatRequestComplete({ status: providerResponse.status, stream: false, provider, model, latency, tokens: normalizedUsage });
+      logChatRequestComplete({ status: providerResponse.status, stream: false, provider, model, latency, tokens: normalizedUsage, routeInfo });
 
       saveRequestDetail(buildRequestDetail({
         ...ctx,
@@ -257,7 +257,7 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, pr
 
     const totalLatency = Date.now() - requestStartTime;
     const latency = { ttft: totalLatency, total: totalLatency };
-    logChatRequestComplete({ status: providerResponse.status, stream: false, provider, model, latency, tokens: usage });
+    logChatRequestComplete({ status: providerResponse.status, stream: false, provider, model, latency, tokens: usage, routeInfo });
     saveRequestDetail(buildRequestDetail({
       ...ctx,
       latency,

@@ -364,7 +364,7 @@ export function buildOnStreamComplete({ provider, model, connectionId, apiKey, r
     };
     const safeContent = contentObj?.content || "[Empty streaming response]";
     const safeThinking = contentObj?.thinking || null;
-    logChatRequestComplete({ status: 200, stream, provider, model, latency, tokens: usage });
+    logChatRequestComplete({ status: 200, stream, provider, model, latency, tokens: usage, routeInfo });
     saveRequestDetail(buildRequestDetail({
       provider, model, connectionId, apiKey, routeInfo,
       latency,

@@ -64,10 +64,12 @@ function appendLine(line, request = null) {
   state.emitter.emit("line", entry);
 }
 
-function formatRequestLog({ status = 200, stream = false, provider, model, duration = 0, ttft = 0, tokens = {} }) {
+function formatRequestLog({ status = 200, stream = false, provider, model, duration = 0, ttft = 0, tokens = {}, displayProvider = null, comboName = null }) {
   const inputTokens = tokens.input_tokens ?? tokens.prompt_tokens ?? 0;
   const outputTokens = tokens.output_tokens ?? tokens.completion_tokens ?? 0;
-  return `[${status}] stream:${Boolean(stream)} ${provider || "unknown"}/${model || "unknown"} | ${Math.max(0, Math.round(duration))}ms (TTFT ${Math.max(0, Math.round(ttft))}) | In: ${inputTokens} | Out: ${outputTokens}`;
+  const name = displayProvider || (provider || "unknown").slice(0, 25);
+  const combo = comboName ? `[${comboName}] ` : "";
+  return `[${status}] stream:${Boolean(stream)} ${combo}${name}/${model || "unknown"} | ${Math.max(0, Math.round(duration))}ms (TTFT ${Math.max(0, Math.round(ttft))}) | In: ${inputTokens} | Out: ${outputTokens}`;
 }
 
 export function appendRequestConsoleLog(request) {
