@@ -91,19 +91,19 @@ const COOLDOWN = {
  */
 export const ERROR_RULES = [
   // --- Transient stream errors: short cooldown, don't mark account dead long ---
-  { text: "empty upstream stream",             cooldownMs: PROVIDER_SELF_HEAL_COOLDOWN_MS, selfHeal: true },
-  { text: "upstream first productive timeout", cooldownMs: PROVIDER_SELF_HEAL_COOLDOWN_MS, selfHeal: true },
-  { text: "upstream stalled",                  cooldownMs: PROVIDER_SELF_HEAL_COOLDOWN_MS, selfHeal: true },
-  { text: "upstream headers timeout",          cooldownMs: PROVIDER_SELF_HEAL_COOLDOWN_MS, selfHeal: true },
+  { text: "empty upstream stream",             cooldownMs: PROVIDER_SELF_HEAL_COOLDOWN_MS_DEFAULT, selfHeal: true },
+  { text: "upstream first productive timeout", cooldownMs: PROVIDER_SELF_HEAL_COOLDOWN_MS_DEFAULT, selfHeal: true },
+  { text: "upstream stalled",                  cooldownMs: PROVIDER_SELF_HEAL_COOLDOWN_MS_DEFAULT, selfHeal: true },
+  { text: "upstream headers timeout",          cooldownMs: PROVIDER_SELF_HEAL_COOLDOWN_MS_DEFAULT, selfHeal: true },
   // --- Request/provider surface errors: short auto-heal, do not mark account dead ---
-  { text: "context_too_large",        cooldownMs: PROVIDER_SELF_HEAL_COOLDOWN_MS, selfHeal: true },
-  { text: "input tokens exceed",      cooldownMs: PROVIDER_SELF_HEAL_COOLDOWN_MS, selfHeal: true },
-  { text: "input exceeds the context window", cooldownMs: PROVIDER_SELF_HEAL_COOLDOWN_MS, selfHeal: true },
-  { text: "context length exceeded",  cooldownMs: PROVIDER_SELF_HEAL_COOLDOWN_MS, selfHeal: true },
-  { text: "maximum context length",   cooldownMs: PROVIDER_SELF_HEAL_COOLDOWN_MS, selfHeal: true },
-  { text: "reduce conversation context", cooldownMs: PROVIDER_SELF_HEAL_COOLDOWN_MS, selfHeal: true },
-  { text: "tools and response_format cannot be combined", cooldownMs: PROVIDER_SELF_HEAL_COOLDOWN_MS, selfHeal: true },
-  { text: "<!doctype html>",          cooldownMs: PROVIDER_SELF_HEAL_COOLDOWN_MS, selfHeal: true },
+  { text: "context_too_large",        cooldownMs: PROVIDER_SELF_HEAL_COOLDOWN_MS_DEFAULT, selfHeal: true },
+  { text: "input tokens exceed",      cooldownMs: PROVIDER_SELF_HEAL_COOLDOWN_MS_DEFAULT, selfHeal: true },
+  { text: "input exceeds the context window", cooldownMs: PROVIDER_SELF_HEAL_COOLDOWN_MS_DEFAULT, selfHeal: true },
+  { text: "context length exceeded",  cooldownMs: PROVIDER_SELF_HEAL_COOLDOWN_MS_DEFAULT, selfHeal: true },
+  { text: "maximum context length",   cooldownMs: PROVIDER_SELF_HEAL_COOLDOWN_MS_DEFAULT, selfHeal: true },
+  { text: "reduce conversation context", cooldownMs: PROVIDER_SELF_HEAL_COOLDOWN_MS_DEFAULT, selfHeal: true },
+  { text: "tools and response_format cannot be combined", cooldownMs: PROVIDER_SELF_HEAL_COOLDOWN_MS_DEFAULT, selfHeal: true },
+  { text: "<!doctype html>",          cooldownMs: PROVIDER_SELF_HEAL_COOLDOWN_MS_DEFAULT, selfHeal: true },
 
   // --- Text-based rules (checked first, order = priority) ---
   { text: "no credentials",           cooldownMs: COOLDOWN.long },
@@ -128,7 +128,7 @@ export const ERROR_RULES = [
   { status: 402, cooldownMs: COOLDOWN.long },
   { status: 403, cooldownMs: COOLDOWN.long },
   { status: 404, cooldownMs: COOLDOWN.long },
-  { status: 530, cooldownMs: PROVIDER_SELF_HEAL_COOLDOWN_MS, selfHeal: true },
+  { status: 530, cooldownMs: PROVIDER_SELF_HEAL_COOLDOWN_MS_DEFAULT, selfHeal: true },
   { status: 429, backoff: true },
 ];
 

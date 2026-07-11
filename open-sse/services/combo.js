@@ -7,7 +7,7 @@ import { parseResetAfterText, parseRetryAfterHeader, unavailableResponse } from 
 import { isImmediateFallbackStatus, isRetryableTransientStatus, resolveRoutePolicy } from "./routePolicy.js";
 import { getCapabilitiesForModel } from "../providers/capabilities.js";
 import { extractTextContent } from "../translator/formats/gemini.js";
-import { MODEL_FAILURE_BACKOFF_MAX_MS, PROVIDER_SELF_HEAL_COOLDOWN_MS } from "../config/errorConfig.js";
+import { MODEL_FAILURE_BACKOFF_MAX_MS, PROVIDER_SELF_HEAL_COOLDOWN_MS_DEFAULT } from "../config/errorConfig.js";
 import { COMBO_REASONING_STREAM_FIRST_PRODUCTIVE_TIMEOUT_MS } from "../config/runtimeConfig.js";
 import { parseSSEToOpenAIResponse } from "../handlers/chatCore/sseToJsonHandler.js";
 
@@ -128,7 +128,7 @@ function markComboCooldown(modelStr) {
 // permanent errors get exponential backoff.
 function markComboSelfHealCooldown(modelStr) {
   const now = Date.now();
-  const until = now + PROVIDER_SELF_HEAL_COOLDOWN_MS;
+  const until = now + PROVIDER_SELF_HEAL_COOLDOWN_MS_DEFAULT;
   comboModelCooldowns.set(modelStr, until);
   // Do NOT touch comboModelFailures — counter stays at current value so the
   // next real failure still starts fresh at the base window.
