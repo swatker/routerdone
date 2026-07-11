@@ -39,6 +39,8 @@ export default function APIPageClient({ machineId }) {
   const [headroomEnabled, setHeadroomEnabled] = useState(false);
   const [headroomUrl, setHeadroomUrl] = useState("http://localhost:8787");
   const [headroomCompressUserMessages, setHeadroomCompressUserMessages] = useState(false);
+  const [headroomAdaptive, setHeadroomAdaptive] = useState({ enabled: true, softThresholdPercent: 70, mandatoryThresholdPercent: 85, compactThresholdPercent: 95, softTimeoutMs: 1500, mandatoryTimeoutMs: 3000 });
+  const [headroomAdaptiveError, setHeadroomAdaptiveError] = useState("");
   const [headroomStatus, setHeadroomStatus] = useState({ installed: false, running: false, python: null, loading: true });
   const [showHeadroomInstallModal, setShowHeadroomInstallModal] = useState(false);
   const [headroomActionLoading, setHeadroomActionLoading] = useState(false);
@@ -248,6 +250,7 @@ export default function APIPageClient({ machineId }) {
         setHeadroomEnabled(!!data.headroomEnabled);
         setHeadroomUrl(data.headroomUrl || "http://localhost:8787");
         setHeadroomCompressUserMessages(!!data.headroomCompressUserMessages);
+        setHeadroomAdaptive(data.headroomAdaptive || { enabled: true, softThresholdPercent: 70, mandatoryThresholdPercent: 85, compactThresholdPercent: 95, softTimeoutMs: 1500, mandatoryTimeoutMs: 3000 });
         refreshHeadroomStatus();
         setCavemanEnabled(!!data.cavemanEnabled);
         setCavemanLevel(data.cavemanLevel || "full");
@@ -318,13 +321,19 @@ export default function APIPageClient({ machineId }) {
 
   const patchSetting = async (patch) => {
     try {
-      await fetch("/api/settings", {
+      const res = await fetch("/api/settings", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),
       });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Failed to update setting");
+      }
+      return true;
     } catch (error) {
       console.log("Error updating setting:", error);
+      return false;
     }
   };
 
@@ -350,6 +359,23 @@ export default function APIPageClient({ machineId }) {
   const handleHeadroomCompressUserMessages = (value) => {
     setHeadroomCompressUserMessages(value);
     patchSetting({ headroomCompressUserMessages: value });
+  };
+
+  const updateHeadroomAdaptive = async (key, rawValue) => {
+    const value = Number(rawValue);
+    const next = { ...headroomAdaptive, [key]: value };
+    const thresholds = [next.softThresholdPercent, next.mandatoryThresholdPercent, next.compactThresholdPercent];
+    const valid = thresholds.every((v) => Number.isInteger(v) && v >= 50 && v <= 99)
+      && thresholds[0] < thresholds[1] && thresholds[1] < thresholds[2]
+      && [next.softTimeoutMs, next.mandatoryTimeoutMs].every((v) => Number.isInteger(v) && v >= 500 && v <= 5000);
+    setHeadroomAdaptive(next);
+    if (!valid) {
+      setHeadroomAdaptiveError("Thresholds must be ordered (50–99%); timeouts must be 500–5000 ms.");
+      return;
+    }
+    setHeadroomAdaptiveError("");
+    const saved = await patchSetting({ headroomAdaptive: next });
+    if (!saved) setHeadroomAdaptiveError("Could not save Headroom settings.");
   };
 
   const refreshHeadroomStatus = useCallback(async () => {
@@ -1330,8 +1356,22 @@ export default function APIPageClient({ machineId }) {
               </button>
             </div>
             <p className="text-sm text-text-muted mt-1">
-              Compress prompts via /v1/compress before routing to the model
+              Adaptive compression via /v1/compress; small requests bypass the extra hop
             </p>
+            {headroomEnabled && headroomRunning && (
+              <div className="mt-3 flex gap-2 flex-wrap items-center text-xs">
+                <label className="text-text-muted">Start %</label>
+                <Input type="number" min="50" max="99" value={headroomAdaptive.softThresholdPercent} onChange={(e) => setHeadroomAdaptive((v) => ({ ...v, softThresholdPercent: Number(e.target.value) }))} onBlur={(e) => updateHeadroomAdaptive("softThresholdPercent", e.target.value)} className="w-20" />
+                <label className="text-text-muted">Required %</label>
+                <Input type="number" min="50" max="99" value={headroomAdaptive.mandatoryThresholdPercent} onChange={(e) => setHeadroomAdaptive((v) => ({ ...v, mandatoryThresholdPercent: Number(e.target.value) }))} onBlur={(e) => updateHeadroomAdaptive("mandatoryThresholdPercent", e.target.value)} className="w-20" />
+                <label className="text-text-muted">Recovery %</label>
+                <Input type="number" min="50" max="99" value={headroomAdaptive.compactThresholdPercent} onChange={(e) => setHeadroomAdaptive((v) => ({ ...v, compactThresholdPercent: Number(e.target.value) }))} onBlur={(e) => updateHeadroomAdaptive("compactThresholdPercent", e.target.value)} className="w-20" />
+                <label className="text-text-muted">Timeout ms</label>
+                <Input type="number" min="500" max="5000" value={headroomAdaptive.softTimeoutMs} onChange={(e) => setHeadroomAdaptive((v) => ({ ...v, softTimeoutMs: Number(e.target.value) }))} onBlur={(e) => updateHeadroomAdaptive("softTimeoutMs", e.target.value)} className="w-24" />
+                <Input type="number" min="500" max="5000" value={headroomAdaptive.mandatoryTimeoutMs} onChange={(e) => setHeadroomAdaptive((v) => ({ ...v, mandatoryTimeoutMs: Number(e.target.value) }))} onBlur={(e) => updateHeadroomAdaptive("mandatoryTimeoutMs", e.target.value)} className="w-24" />
+                {headroomAdaptiveError && <span className="text-red-500 basis-full">{headroomAdaptiveError}</span>}
+              </div>
+            )}
           </div>
           <Toggle
             checked={headroomEnabled && headroomRunning}
