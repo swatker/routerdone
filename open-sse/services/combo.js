@@ -54,11 +54,20 @@ function isSlowReasoningAttempt(body, modelStr) {
 
 function withModelStreamPolicy(baseStreamPolicy, body, modelStr, hasFallback = false) {
   if (!isSlowReasoningAttempt(body, modelStr)) return baseStreamPolicy;
-  // non-final attempts: tighten to shorter cap so dead reasoning models are abandoned quickly.
-  // final attempt: allow the full reasoning cap (25s default) for models that have no fallback.
-  const policyCap = hasFallback
-    ? baseStreamPolicy?.firstProductiveTimeoutMs
-    : COMBO_REASONING_STREAM_FIRST_PRODUCTIVE_TIMEOUT_MS;
+  // Reasoning models get the full reasoning cap REGARDLESS of combo position.
+  //
+  // Earlier this tightened non-final attempts back to the ~9s combo default to
+  // abandon "dead" reasoning models quickly. But the deadline that fires here is
+  // headersDeadlineMs (firstByte + firstProductive), which aborts BEFORE any
+  // upstream headers arrive — and at that point a genuinely-hung model is
+  // indistinguishable from a healthy one still prefilling a large context. On
+  // real Claude Code traffic (100k+ tokens) deepseek-v4-pro at combo position
+  // 2/3 needs >9s just to return headers, so the old tightening aborted a
+  // perfectly alive model at exactly 12s (3s + 9s) -> "Upstream headers timeout"
+  // 502. Fast-failing upstreams (429/connection errors) are NOT timeouts and
+  // still fall through immediately, so always granting the long cap costs
+  // nothing on the common failure paths.
+  const policyCap = COMBO_REASONING_STREAM_FIRST_PRODUCTIVE_TIMEOUT_MS;
   if (policyCap == null) return baseStreamPolicy;
   return {
     ...baseStreamPolicy,
