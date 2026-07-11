@@ -56,10 +56,23 @@ export const BUSY_CONNECTION_COOLDOWN_MS = 30 * 1000;
 
 // Short self-heal window for request-scoped/provider-surface errors. These
 // should clear from Provider UI quickly and be retried on the next call.
-export const PROVIDER_SELF_HEAL_COOLDOWN_MS = 3 * 1000;
+export const PROVIDER_SELF_HEAL_COOLDOWN_MS_DEFAULT = 3 * 1000;
 
 // Hard cap for provider-reported rate limit cooldown (e.g. codex resets_at can be 5-6h)
-export const MAX_RATE_LIMIT_COOLDOWN_MS = 30 * 60 * 1000;
+export const MAX_RATE_LIMIT_COOLDOWN_MS_DEFAULT = 30 * 60 * 1000;
+
+// Runtime overrides loaded from settings (errorFix). Updated by getErrorFixConfig().
+let errorFixConfig = null;
+
+export function getErrorFixConfig() { return errorFixConfig; }
+
+export function setErrorFixConfig(cfg) { errorFixConfig = cfg || null; }
+
+export function resolveErrorFix(key, fallback) {
+  return (errorFixConfig && Number.isFinite(errorFixConfig[key]) && errorFixConfig[key] > 0)
+    ? errorFixConfig[key]
+    : fallback;
+}
 
 // Cooldown durations (ms)
 const COOLDOWN = {
@@ -125,6 +138,6 @@ export const COOLDOWN_MS = {
   paymentRequired: COOLDOWN.long,
   notFound: COOLDOWN.long,
   transient: TRANSIENT_COOLDOWN_MS,
-  selfHeal: PROVIDER_SELF_HEAL_COOLDOWN_MS,
+  selfHeal: PROVIDER_SELF_HEAL_COOLDOWN_MS_DEFAULT,
   requestNotAllowed: COOLDOWN.short,
 };

@@ -168,6 +168,14 @@ export async function PATCH(request) {
       setConsoleLogRetentionMs(settings.consoleLogRetentionMs);
     }
 
+    // Apply errorFix overrides immediately (self-heal / cooldown / ban thresholds)
+    if (Object.prototype.hasOwnProperty.call(body, "errorFix")) {
+      try {
+        const { setErrorFixConfig } = await import("open-sse/config/errorConfig.js");
+        setErrorFixConfig(settings.errorFix || null);
+      } catch { /* errorFix hot-reload is best-effort */ }
+    }
+
     const { password, ...safeSettings } = settings;
     return NextResponse.json(safeSettings, { headers: SETTINGS_RESPONSE_HEADERS });
   } catch (error) {
