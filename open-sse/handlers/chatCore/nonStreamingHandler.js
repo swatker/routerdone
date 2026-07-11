@@ -151,6 +151,9 @@ function hasProductiveResponse(body) {
   const choice = body.choices?.[0];
   const msg = choice?.message || choice?.delta || {};
   if (typeof msg.content === "string" && msg.content.length > 0) return true;
+  // Claude-format responses carry content as an array of blocks
+  // [{ type:"text", text:"hello" }] — each is a productive response.
+  if (Array.isArray(msg.content) && msg.content.some((b) => typeof b?.text === "string" && b.text.length > 0)) return true;
   if (typeof msg.reasoning_content === "string" && msg.reasoning_content.length > 0) return true;
   if (typeof msg.refusal === "string" && msg.refusal.length > 0) return true;
   if (Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) return true;
@@ -258,7 +261,7 @@ export async function handleNonStreamingResponse({ providerResponse, provider, m
 
   const totalLatency = Date.now() - requestStartTime;
   const latency = { ttft: totalLatency, total: totalLatency };
-  logChatRequestComplete({ status: providerResponse.status, stream, provider, model, latency, tokens: usage });
+  logChatRequestComplete({ status: providerResponse.status, stream, provider, model, latency, tokens: usage, routeInfo });
   saveRequestDetail(buildRequestDetail({
     provider, model, connectionId, apiKey, routeInfo,
     latency,
