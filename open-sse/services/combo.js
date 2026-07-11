@@ -36,7 +36,20 @@ const consoleTimeFormatter = new Intl.DateTimeFormat("sv-SE", {
 function isSlowReasoningAttempt(body, modelStr) {
   const effort = String(body?.reasoning_effort || body?.reasoning?.effort || "").toLowerCase();
   const model = String(modelStr || "").toLowerCase();
-  return ["high", "xhigh"].includes(effort) || /(?:thinking|reasoning|xhigh)/i.test(model);
+  if (["high", "xhigh"].includes(effort) || /(?:thinking|reasoning|xhigh)/i.test(model)) return true;
+  // Also honor the model's declared reasoning capability. Names like
+  // "grok-4.5" / "glm-5.1" / "deepseek-v4-flash" carry no reasoning keyword and
+  // clients often omit reasoning_effort, yet these models prefill slowly. Read
+  // the capability flag so they get the longer reasoning timeout instead of the
+  // 9s combo default (root cause of ttft=0 aborts at ~12s).
+  const slash = typeof modelStr === "string" ? modelStr.indexOf("/") : -1;
+  const provider = slash > 0 ? modelStr.slice(0, slash) : "";
+  const modelId = slash > 0 ? modelStr.slice(slash + 1) : modelStr;
+  try {
+    const caps = getCapabilitiesForModel(provider, modelId);
+    if (caps?.reasoning === true) return true;
+  } catch { /* capability lookup best-effort; fall through to false */ }
+  return false;
 }
 
 function withModelStreamPolicy(baseStreamPolicy, body, modelStr, hasFallback = false) {

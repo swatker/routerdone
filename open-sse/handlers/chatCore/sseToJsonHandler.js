@@ -118,6 +118,20 @@ function hasProductiveJsonResponse(body) {
 }
 
 /**
+ * Re-wrap already-read SSE text as a ReadableStream so the Responses-API
+ * stream converter can consume it (we read the body once for shape detection).
+ */
+function sseTextToStream(text) {
+  const bytes = new TextEncoder().encode(String(text || ""));
+  return new ReadableStream({
+    start(controller) {
+      controller.enqueue(bytes);
+      controller.close();
+    }
+  });
+}
+
+/**
  * Handle case: provider forced streaming but client wants JSON.
  * Supports both Codex/Responses API SSE and standard Chat Completions SSE.
  */
@@ -134,11 +148,27 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, pr
     providerRequest: finalBody || translatedBody || null
   };
 
+  // Read the SSE body once so we can both shape-detect and parse it without
+  // consuming the response stream twice.
+  let sseText;
+  try {
+    sseText = await providerResponse.text();
+  } catch (err) {
+    console.error("[ChatCore] Failed to read forced-SSE body:", err);
+    return createErrorResult(HTTP_STATUS.BAD_GATEWAY, "Failed to read streaming response");
+  }
+
+  // Detect Responses-API SSE shape from the actual payload, not just provider config.
+  // Some OpenAI-compatible upstreams (e.g. grok via VietAPI) emit Responses events
+  // (response.created / response.output_item.*) even without a Responses content-type,
+  // which the Chat Completions parser cannot read -> false "Empty upstream stream" 502.
+  const looksLikeResponsesSSE = /(?:^|\n)event:\s*response\.|"type"\s*:\s*"response\./.test(sseText.slice(0, 800));
+
   // Codex/Responses API SSE path
-  const isCodexResponsesApi = isResponsesProvider(provider) || sourceFormat === FORMATS.OPENAI_RESPONSES;
+  const isCodexResponsesApi = isResponsesProvider(provider) || sourceFormat === FORMATS.OPENAI_RESPONSES || looksLikeResponsesSSE;
   if (isCodexResponsesApi) {
     try {
-      const jsonResponse = await convertResponsesStreamToJson(providerResponse.body);
+      const jsonResponse = await convertResponsesStreamToJson(sseTextToStream(sseText));
       if (!hasProductiveJsonResponse(jsonResponse)) return createErrorResult(HTTP_STATUS.BAD_GATEWAY, "Empty upstream stream before content");
       if (onRequestSuccess) await onRequestSuccess();
 
@@ -213,9 +243,8 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, pr
     }
   }
 
-  // Standard Chat Completions SSE path
+  // Standard Chat Completions SSE path (sseText already read above)
   try {
-    const sseText = await providerResponse.text();
     const parsed = parseSSEToOpenAIResponse(sseText, model);
     if (!parsed) return createErrorResult(HTTP_STATUS.BAD_GATEWAY, "Invalid SSE response for non-streaming request");
 
