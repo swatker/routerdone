@@ -45,6 +45,13 @@ function formatDisplayLine(entry, timeZone) {
   return c ? "[" + c + "] " + n.line : n.line;
 }
 
+// Extract a short display name from a provider ID like "openai-compatible-chat-77b8f184-..."
+function shortProvider(providerId) {
+  if (!providerId || typeof providerId !== "string") return "?";
+  const m = providerId.match(/^([a-z]+(?:-[a-z]+)*)/);
+  return m ? m[1] : providerId.slice(0, 16);
+}
+
 // ── Error Fix Settings panel ──
 
 const ERROR_FIX_DEFAULTS = {
@@ -123,28 +130,26 @@ const COLUMNS = [
   { key: "status", label: "Status", w: "w-[52px]" },
   { key: "stream", label: "", w: "w-[28px]" },
   { key: "combo", label: "Combo", w: "w-[64px]" },
-  { key: "provider", label: "Provider", w: "w-[72px]" },
+  { key: "provider", label: "Provider", w: "w-[88px]" },
   { key: "model", label: "Model", w: "w-[120px]" },
-  { key: "duration", label: "Duration", w: "w-[70px]" },
+  { key: "duration", label: "Duration", w: "w-[85px]" },
   { key: "tokens", label: "Tokens", w: "w-[100px]" },
 ];
 
 function LogTable({ entries, timeZone }) {
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-[11px] font-mono">
-        <thead>
-          <tr className="border-b border-border/50 text-text-muted">
-            {COLUMNS.map(c => (
-              <th key={c.key} className={"text-left font-semibold px-2 py-2 " + c.w}>{c.label}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {entries.map((entry, i) => <LogRow key={i} entry={entry} timeZone={timeZone} />)}
-        </tbody>
-      </table>
-    </div>
+    <table className="w-full text-[11px] font-mono">
+      <thead>
+        <tr className="border-b border-border/50 text-text-muted sticky top-0 bg-black z-10">
+          {COLUMNS.map(c => (
+            <th key={c.key} className={"text-left font-semibold px-2 py-2 " + c.w}>{c.label}</th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {entries.map((entry, i) => <LogRow key={i} entry={entry} timeZone={timeZone} />)}
+      </tbody>
+    </table>
   );
 }
 
@@ -168,7 +173,7 @@ function LogRow({ entry, timeZone }) {
   const tokens = request.tokens || {};
   const input = tokens.input_tokens ?? tokens.prompt_tokens ?? 0;
   const output = tokens.output_tokens ?? tokens.completion_tokens ?? 0;
-  const provider = request.displayProvider || request.provider?.slice(0, 20) || "?";
+  const provider = request.displayProvider || shortProvider(request.provider) || "?";
   const model = request.model || "?";
   const combo = request.comboName;
   const duration = Math.round(request.duration || 0);
@@ -334,16 +339,29 @@ export default function ConsoleLogClient() {
           </div>
         )}
 
-        {/* Log table */}
-        <div ref={logRef} onScroll={handleScroll} className="bg-black rounded-b-lg overflow-auto" style={{ height: "calc(100vh - 420px)" }}>
-          {displayed.length === 0 ? (
-            <div className="p-4 text-xs text-text-muted">{tab === "errors" ? "No errors. System healthy." : "No logs yet."}</div>
-          ) : (
-            <LogTable entries={displayed} timeZone={timeZone} />
-          )}
-        </div>
+        {/* Error Log as inline section BELOW the console log table */}
+        {tab === "errors" && (
+          <div ref={logRef} onScroll={handleScroll} className="bg-black overflow-auto" style={{ maxHeight: "250px" }}>
+            {displayed.length === 0 ? (
+              <div className="p-4 text-xs text-text-muted">No errors. System healthy.</div>
+            ) : (
+              <LogTable entries={displayed} timeZone={timeZone} />
+            )}
+          </div>
+        )}
 
-        {/* Error Fix Settings */}
+        {/* Main Console Log table */}
+        {tab === "all" && (
+          <div ref={logRef} onScroll={handleScroll} className="bg-black overflow-auto" style={{ height: "calc(100vh - 460px)" }}>
+            {displayed.length === 0 ? (
+              <div className="p-4 text-xs text-text-muted">No logs yet.</div>
+            ) : (
+              <LogTable entries={displayed} timeZone={timeZone} />
+            )}
+          </div>
+        )}
+
+        {/* Error Fix Settings at the bottom */}
         <ErrorFixSettings settings={settings} onSave={(cfg) => setSettings(prev => ({ ...prev, errorFix: cfg }))} />
       </Card>
     </div>

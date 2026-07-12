@@ -87,7 +87,7 @@ export function logChatRequestComplete({ status = 200, stream = false, provider,
     duration: latency?.total || 0,
     ttft: latency?.ttft || 0,
     tokens: tokens || {},
-    displayProvider,
+    displayProvider: displayProvider || null,
     comboName: routeInfo?.comboName || null,
   });
 }
