@@ -45,13 +45,6 @@ function formatDisplayLine(entry, timeZone) {
   return c ? "[" + c + "] " + n.line : n.line;
 }
 
-// Extract a short display name from a provider ID like "openai-compatible-chat-77b8f184-..."
-function shortProvider(providerId) {
-  if (!providerId || typeof providerId !== "string") return "?";
-  const m = providerId.match(/^([a-z]+(?:-[a-z]+)*)/);
-  return m ? m[1] : providerId.slice(0, 16);
-}
-
 // ── Error Fix Settings panel ──
 
 const ERROR_FIX_DEFAULTS = {
@@ -136,32 +129,36 @@ const COLUMNS = [
   { key: "tokens", label: "Tokens", w: "w-[100px]" },
 ];
 
-function LogTable({ entries, timeZone }) {
+function LogTable({ entries, timeZone, compact }) {
+  const cols = compact
+    ? COLUMNS.filter(c => c.key !== "stream" && c.key !== "combo")
+    : COLUMNS;
   return (
     <table className="w-full text-[11px] font-mono">
       <thead>
         <tr className="border-b border-border/50 text-text-muted sticky top-0 bg-black z-10">
-          {COLUMNS.map(c => (
+          {cols.map(c => (
             <th key={c.key} className={"text-left font-semibold px-2 py-2 " + c.w}>{c.label}</th>
           ))}
         </tr>
       </thead>
       <tbody>
-        {entries.map((entry, i) => <LogRow key={i} entry={entry} timeZone={timeZone} />)}
+        {entries.map((entry, i) => <LogRow key={i} entry={entry} timeZone={timeZone} compact={compact} />)}
       </tbody>
     </table>
   );
 }
 
-function LogRow({ entry, timeZone }) {
+function LogRow({ entry, timeZone, compact }) {
   const { request } = normalizeLogEntry(entry);
   if (!request) {
     const line = formatDisplayLine(entry, timeZone);
     const isErr = /\[(ERROR|FAILED)\]/.test(line);
     const isWarn = /\[WARN/.test(line);
+    const colSpan = compact ? 6 : 8;
     return (
       <tr className={"border-b border-white/[0.02] " + (isErr ? "bg-red-500/10" : isWarn ? "bg-amber-500/5" : "")}>
-        <td colSpan={8} className={"px-2 py-1 " + (isErr ? "text-red-400" : isWarn ? "text-amber-400" : "text-green-400")}>{line}</td>
+        <td colSpan={colSpan} className={"px-2 py-1 " + (isErr ? "text-red-400" : isWarn ? "text-amber-400" : "text-green-400")}>{line}</td>
       </tr>
     );
   }
@@ -173,7 +170,7 @@ function LogRow({ entry, timeZone }) {
   const tokens = request.tokens || {};
   const input = tokens.input_tokens ?? tokens.prompt_tokens ?? 0;
   const output = tokens.output_tokens ?? tokens.completion_tokens ?? 0;
-  const provider = request.displayProvider || shortProvider(request.provider) || "?";
+  const provider = request.displayProvider || request.provider || "?";
   const model = request.model || "?";
   const combo = request.comboName;
   const duration = Math.round(request.duration || 0);
@@ -190,12 +187,14 @@ function LogRow({ entry, timeZone }) {
       <td className="px-2 py-1.5">
         <span className={"inline-block rounded px-1.5 py-0.5 text-[10px] font-bold tabular-nums " + statusBadge}>{status}</span>
       </td>
-      <td className="px-2 py-1.5">
-        <span className={Number(request.stream) ? "text-cyan-400" : "text-amber-400"}>
-          {Number(request.stream) ? "S" : "J"}
-        </span>
-      </td>
-      <td className="px-2 py-1.5 text-indigo-300 font-semibold text-[10px]">{combo || "-"}</td>
+      {!compact && (
+        <td className="px-2 py-1.5">
+          <span className={Number(request.stream) ? "text-cyan-400" : "text-amber-400"}>
+            {Number(request.stream) ? "S" : "J"}
+          </span>
+        </td>
+      )}
+      {!compact && <td className="px-2 py-1.5 text-indigo-300 font-semibold text-[10px]">{combo || "-"}</td>}
       <td className="px-2 py-1.5 text-sky-200 font-semibold">{provider}</td>
       <td className="px-2 py-1.5 text-blue-200 truncate max-w-[120px]" title={model}>{model.slice(0, 22)}</td>
       <td className="px-2 py-1.5 text-amber-300 tabular-nums">{duration}ms{request.ttft > 0 ? <span className="text-text-muted ml-1">T{Math.round(request.ttft)}</span> : null}</td>
@@ -213,26 +212,51 @@ function LogRow({ entry, timeZone }) {
 export default function ConsoleLogClient() {
   const [logs, setLogs] = useState([]);
   const [timeZone] = useState(getBrowserTimeZone);
-  const [tab, setTab] = useState("all");
   const [retentionMs, setRetentionMs] = useState(String(CONSOLE_LOG_CONFIG.defaultRetentionMs));
   const [savingRetention, setSavingRetention] = useState(false);
   const [settings, setSettings] = useState(null);
-  const logRef = useRef(null);
-  const autoScroll = useRef(true);
+  const [providerNames, setProviderNames] = useState({});
+  const consoleLogRef = useRef(null);
+  const errorLogRef = useRef(null);
+  const autoScrollConsole = useRef(true);
+  const autoScrollError = useRef(true);
 
+  // Fetch settings + provider node names
   useEffect(() => {
     let alive = true;
-    fetch("/api/settings", { cache: "no-store" })
-      .then(r => r.ok ? r.json() : null)
-      .then(s => {
-        if (alive && s) {
-          setSettings(s);
-          setRetentionMs(String(s.consoleLogRetentionMs ?? CONSOLE_LOG_CONFIG.defaultRetentionMs));
+    Promise.all([
+      fetch("/api/settings", { cache: "no-store" }).then(r => r.ok ? r.json() : null),
+      fetch("/api/provider-nodes", { cache: "no-store" }).then(r => r.ok ? r.json() : null),
+      fetch("/api/providers", { cache: "no-store" }).then(r => r.ok ? r.json() : null),
+    ]).then(([s, nodesData, providersData]) => {
+      if (!alive) return;
+      if (s) {
+        setSettings(s);
+        setRetentionMs(String(s.consoleLogRetentionMs ?? CONSOLE_LOG_CONFIG.defaultRetentionMs));
+      }
+      // Build provider name map: providerId → readable name
+      const nameMap = {};
+      // From provider nodes (openai-compatible, anthropic-compatible, custom-embedding)
+      if (nodesData?.nodes) {
+        for (const node of nodesData.nodes) {
+          if (node.id && node.name) nameMap[node.id] = node.name;
         }
-      }).catch(() => {});
+      }
+      // From provider connections (regular providers have name)
+      if (providersData?.connections) {
+        for (const conn of providersData.connections) {
+          if (conn.provider && conn.name) {
+            // Only override if we don't already have a node name
+            if (!nameMap[conn.provider]) nameMap[conn.provider] = conn.name;
+          }
+        }
+      }
+      setProviderNames(nameMap);
+    }).catch(() => {});
     return () => { alive = false; };
   }, []);
 
+  // SSE stream for console logs
   useEffect(() => {
     const es = new EventSource("/api/translator/console-logs/stream");
     es.onmessage = (event) => {
@@ -248,20 +272,44 @@ export default function ConsoleLogClient() {
     return () => es.close();
   }, []);
 
-  useEffect(() => {
-    if (autoScroll.current && logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
-  }, [logs]);
+  // Apply provider name mapping to entries
+  const resolvedLogs = useMemo(() => {
+    if (Object.keys(providerNames).length === 0) return logs;
+    return logs.map(entry => {
+      const n = normalizeLogEntry(entry);
+      if (n.request && n.request.provider && providerNames[n.request.provider] && !n.request.displayProvider) {
+        return {
+          ...entry,
+          request: { ...n.request, displayProvider: providerNames[n.request.provider] },
+        };
+      }
+      return entry;
+    });
+  }, [logs, providerNames]);
 
-  const handleScroll = () => {
-    if (!logRef.current) return;
-    const { scrollTop, scrollHeight, clientHeight } = logRef.current;
-    autoScroll.current = (scrollHeight - scrollTop - clientHeight) < 40;
+  useEffect(() => {
+    if (autoScrollConsole.current && consoleLogRef.current) {
+      consoleLogRef.current.scrollTop = consoleLogRef.current.scrollHeight;
+    }
+    if (autoScrollError.current && errorLogRef.current) {
+      errorLogRef.current.scrollTop = errorLogRef.current.scrollHeight;
+    }
+  }, [resolvedLogs]);
+
+  const handleScrollConsole = () => {
+    if (!consoleLogRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = consoleLogRef.current;
+    autoScrollConsole.current = (scrollHeight - scrollTop - clientHeight) < 40;
   };
 
-  const allEntries = useMemo(() => logs.filter(e => normalizeLogEntry(e).request), [logs]);
-  const errorEntries = useMemo(() => allEntries.filter(e => Number(e.request?.status) >= 400), [allEntries]);
+  const handleScrollError = () => {
+    if (!errorLogRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = errorLogRef.current;
+    autoScrollError.current = (scrollHeight - scrollTop - clientHeight) < 40;
+  };
 
-  const displayed = tab === "errors" ? errorEntries : allEntries;
+  const allEntries = useMemo(() => resolvedLogs.filter(e => normalizeLogEntry(e).request), [resolvedLogs]);
+  const errorEntries = useMemo(() => allEntries.filter(e => Number(e.request?.status) >= 400), [allEntries]);
 
   const handleClear = async () => {
     try { await fetch("/api/translator/console-logs", { method: "DELETE" }); } catch { /* ignore */ }
@@ -302,13 +350,12 @@ export default function ConsoleLogClient() {
   return (
     <div>
       <Card>
-        {/* Tabs + controls */}
+        {/* Top bar: controls */}
         <div className="flex flex-wrap items-center justify-between gap-2 px-4 pt-3 pb-2">
-          <div className="flex items-center gap-1">
-            <button onClick={() => setTab("all")} className={"px-3 py-1 rounded text-xs font-semibold transition " + (tab === "all" ? "bg-surface-2 text-text-main" : "text-text-muted hover:text-text-main")}>Console Log</button>
-            <button onClick={() => setTab("errors")} className={"px-3 py-1 rounded text-xs font-semibold transition " + (tab === "errors" ? "bg-red-500/20 text-red-300" : "text-text-muted hover:text-red-300")}>Error Log {errorEntries.length > 0 && <span className="tabular-nums ml-1">({errorEntries.length})</span>}</button>
-            <span className="text-[11px] text-text-muted ml-3">
-              {tab === "errors" ? `${errorEntries.length} errors` : `${allEntries.length} requests`} / {logs.length} lines
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-bold text-text-main">Console Log</span>
+            <span className="text-[11px] text-text-muted">
+              {allEntries.length} requests / {logs.length} lines
             </span>
           </div>
           <div className="flex items-center gap-2">
@@ -323,43 +370,52 @@ export default function ConsoleLogClient() {
           </div>
         </div>
 
-        {/* Error groups banner (Error Log tab) */}
-        {tab === "errors" && errorGroups.length > 0 && (
-          <div className="flex flex-wrap items-center gap-2 px-4 pb-2">
-            {errorGroups.map((g, i) => {
-              const is5 = g.status >= 500;
-              return (
-                <div key={i} className={"flex items-center gap-1.5 rounded border px-2 py-0.5 text-[10px] font-bold " + (is5 ? "bg-red-500/15 border-red-500/30 text-red-300" : "bg-amber-500/15 border-amber-500/30 text-amber-300")}>
-                  <span>{g.status}</span>
-                  <span className="opacity-70 font-normal">{g.model?.slice(0, 18)}</span>
-                  <span className="tabular-nums">x{g.count}</span>
-                </div>
-              );
-            })}
+        {/* Two logs side-by-side */}
+        <div className="flex gap-0 border-t border-border">
+          {/* Console Log (left) */}
+          <div className="flex-1 min-w-0 border-r border-border">
+            <div className="px-4 py-1.5 border-b border-border/50 bg-black">
+              <span className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Console Log</span>
+              <span className="text-[10px] text-text-muted ml-2 tabular-nums">{allEntries.length} reqs</span>
+            </div>
+            <div ref={consoleLogRef} onScroll={handleScrollConsole} className="bg-black overflow-auto" style={{ height: "calc(100vh - 400px)" }}>
+              {allEntries.length === 0 ? (
+                <div className="p-4 text-xs text-text-muted">No logs yet.</div>
+              ) : (
+                <LogTable entries={allEntries} timeZone={timeZone} compact={false} />
+              )}
+            </div>
           </div>
-        )}
 
-        {/* Error Log as inline section BELOW the console log table */}
-        {tab === "errors" && (
-          <div ref={logRef} onScroll={handleScroll} className="bg-black overflow-auto" style={{ maxHeight: "250px" }}>
-            {displayed.length === 0 ? (
-              <div className="p-4 text-xs text-text-muted">No errors. System healthy.</div>
-            ) : (
-              <LogTable entries={displayed} timeZone={timeZone} />
+          {/* Error Log (right) */}
+          <div className="w-[360px] flex-none">
+            <div className="px-4 py-1.5 border-b border-border/50 bg-black">
+              <span className="text-[10px] font-bold text-red-400 uppercase tracking-wider">Error Log</span>
+              <span className="text-[10px] text-text-muted ml-2 tabular-nums">{errorEntries.length} errors</span>
+            </div>
+            {/* Error badges */}
+            {errorGroups.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5 px-3 py-1.5 border-b border-border/50 bg-black/50">
+                {errorGroups.map((g, i) => {
+                  const is5 = g.status >= 500;
+                  return (
+                    <div key={i} className={"flex items-center gap-1 rounded border px-1.5 py-0.5 text-[9px] font-bold " + (is5 ? "bg-red-500/15 border-red-500/30 text-red-300" : "bg-amber-500/15 border-amber-500/30 text-amber-300")}>
+                      <span>{g.status}</span>
+                      <span className="tabular-nums">x{g.count}</span>
+                    </div>
+                  );
+                })}
+              </div>
             )}
+            <div ref={errorLogRef} onScroll={handleScrollError} className="bg-black overflow-auto" style={{ height: "calc(100vh - " + (errorGroups.length > 0 ? "440" : "415") + "px)" }}>
+              {errorEntries.length === 0 ? (
+                <div className="p-4 text-xs text-text-muted">No errors. System healthy.</div>
+              ) : (
+                <LogTable entries={errorEntries} timeZone={timeZone} compact={true} />
+              )}
+            </div>
           </div>
-        )}
-
-        {/* Main Console Log table */}
-        {tab === "all" && (
-          <div ref={logRef} onScroll={handleScroll} className="bg-black overflow-auto" style={{ height: "calc(100vh - 460px)" }}>
-            {displayed.length === 0 ? (
-              <div className="p-4 text-xs text-text-muted">No logs yet.</div>
-            ) : (
-              <LogTable entries={displayed} timeZone={timeZone} />
-            )}
-          </div>
-        )}
+        </div>
 
         {/* Error Fix Settings at the bottom */}
         <ErrorFixSettings settings={settings} onSave={(cfg) => setSettings(prev => ({ ...prev, errorFix: cfg }))} />
