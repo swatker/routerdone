@@ -309,7 +309,15 @@ export default function ModelSelectModal({
             value: `${nodePrefix}/${fullModel.replace(`${providerId}/`, "")}`,
           }));
 
-        const liveNodeModels = mergeLiveModels(providerId, nodePrefix, nodeModels, connection?.id || connection?.connectionId, { forceAliasPrefix: true });
+        // Also merge custom models registered via "Add Model" button (scope: customModels)
+        const customAliasIds = new Set(nodeModels.map(m => m.id));
+        const customNodeModels = customModels
+          .filter(m => m.providerAlias === providerId && !customAliasIds.has(m.id))
+          .map(m => ({ id: m.id, name: m.name || m.id, value: `${nodePrefix}/${m.id}`, isCustom: true }));
+
+        const mergedNodeModels = [...nodeModels, ...customNodeModels];
+
+        const liveNodeModels = mergeLiveModels(providerId, nodePrefix, mergedNodeModels, connection?.id || connection?.connectionId, { forceAliasPrefix: true });
 
         // Always show compatible providers that are connected, even with no aliases.
         // Prefer live /models output; fall back to placeholder when the provider cannot list models.
@@ -326,7 +334,7 @@ export default function ModelSelectModal({
           color: providerInfo.color,
           models: modelsToShow,
           isCustom: true,
-          hasModels: nodeModels.length > 0,
+          hasModels: (nodeModels.length + customNodeModels.length) > 0,
         };
       } else {
         const hardcodedModels = getModelsByProviderId(providerId);
