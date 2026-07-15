@@ -1390,7 +1390,8 @@ export default function APIPageClient({ machineId }) {
             disabled={!headroomRunning}
             onChange={() => handleHeadroomEnabled(!headroomEnabled)}
           />
-        </div>`n        <div className="flex items-center justify-between pt-4 border-t border-border gap-4 flex-wrap">
+        </div>
+        <div className="flex items-center justify-between pt-4 border-t border-border gap-4 flex-wrap">
           <div className="min-w-0 flex-1">
             <p className="font-medium">OpenAI Responses server-side compaction</p>
             <p className="text-sm text-text-muted mt-1">Native opaque compaction item; no separate compression model required.</p>
@@ -1403,7 +1404,8 @@ export default function APIPageClient({ machineId }) {
             )}
           </div>
           <Toggle checked={responsesCompactionEnabled} onChange={() => { const next = !responsesCompactionEnabled; setResponsesCompactionEnabled(next); patchSetting({ responsesCompactionEnabled: next, responsesCompactionThresholdTokens: Number(responsesCompactionThresholdTokens) }); }} />
-        </div>`n        <div className="flex items-center justify-between pt-4 border-t border-border gap-4 flex-wrap">
+        </div>
+        <div className="flex items-center justify-between pt-4 border-t border-border gap-4 flex-wrap">
           <div className="min-w-0 flex-1">
             <p className="font-medium">RouterDone context summary backup</p>
             <p className="text-sm text-text-muted mt-1">Optional context-summary backup for any target; enable only when needed.</p>
