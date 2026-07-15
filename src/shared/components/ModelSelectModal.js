@@ -30,6 +30,7 @@ export default function ModelSelectModal({
   activeProviders = [],
   title = "Select Model",
   modelAliases = {},
+  availableModels = [],
   kindFilter = null,
   addedModelValues = [],
   closeOnSelect = true,
@@ -212,7 +213,8 @@ export default function ModelSelectModal({
       ...(showAllProviders ? Object.keys(allProviders) : []),
       ...(showAllProviders ? Object.values(modelAliases).filter((value) => typeof value === 'string').map((value) => value.split('/')[0]) : []),
       ...(showAllProviders ? customModels.map((model) => model.providerAlias).filter(Boolean) : []),
-      ...(showAllProviders ? Object.keys(liveModelsByProvider).filter((key) => allProviders[key]) : [])
+      ...(showAllProviders ? Object.keys(liveModelsByProvider).filter((key) => allProviders[key]) : []),
+      ...(showAllProviders ? availableModels.map((model) => model.provider).filter(Boolean) : [])
     ]);
 
     // Sort by PROVIDER_ORDER
@@ -318,7 +320,23 @@ export default function ModelSelectModal({
             value: `${nodePrefix}/${fullModel.replace(`${providerId}/`, "")}`,
           }));
 
-        const liveNodeModels = mergeLiveModels(providerId, nodePrefix, nodeModels, connection?.id || connection?.connectionId, { forceAliasPrefix: true });
+        const registeredCustomModels = customModels
+          .filter((model) => model.providerAlias === providerId || model.providerAlias === nodePrefix)
+          .map((model) => ({
+            id: model.id,
+            name: model.name || model.id,
+            value: `${nodePrefix}/${model.id}`,
+            kind: getModelKind(model),
+            isCustom: true,
+          }));
+
+        const liveNodeModels = mergeLiveModels(
+          providerId,
+          nodePrefix,
+          [...nodeModels, ...registryModels, ...registeredCustomModels],
+          connection?.id || connection?.connectionId,
+          { forceAliasPrefix: true }
+        );
 
         // Always show compatible providers that are connected, even with no aliases.
         // Prefer live /models output; fall back to placeholder when the provider cannot list models.
@@ -408,7 +426,7 @@ export default function ModelSelectModal({
     });
 
     return groups;
-  }, [filteredActiveProviders, modelAliases, allProviders, providerNodes, customModels, disabledModels, kindFilter, activeProviders, mergeLiveModels, showAllProviders, liveModelsByProvider]);
+  }, [filteredActiveProviders, modelAliases, availableModels, allProviders, providerNodes, customModels, disabledModels, kindFilter, activeProviders, mergeLiveModels, showAllProviders, liveModelsByProvider]);
 
   // Filter combos by search query (and hide combos when kindFilter is set — combos are LLM-only by design)
   const filteredCombos = useMemo(() => {
@@ -638,6 +656,7 @@ ModelSelectModal.propTypes = {
   ),
   title: PropTypes.string,
   modelAliases: PropTypes.object,
+  availableModels: PropTypes.array,
   kindFilter: PropTypes.string,
   addedModelValues: PropTypes.arrayOf(PropTypes.string),
   closeOnSelect: PropTypes.bool,

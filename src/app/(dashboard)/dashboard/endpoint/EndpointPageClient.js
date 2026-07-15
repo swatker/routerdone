@@ -253,7 +253,7 @@ export default function APIPageClient({ machineId }) {
       const res = await fetch("/api/providers", { cache: "no-store" });
       if (res.ok) {
         const data = await res.json();
-        setActiveProviders(Array.isArray(data.connections) ? data.connections.filter((item) => item.isActive !== false) : []);
+        setActiveProviders(Array.isArray(data.connections) ? data.connections : []);
       }
     } catch { /* optional provider list */ }
   };
@@ -1565,6 +1565,7 @@ export default function APIPageClient({ machineId }) {
         }}
         activeProviders={activeProviders}
         modelAliases={modelAliases}
+        availableModels={availableModels}
         showAllProviders
         selectedModel={(compactModelSlot === "fallback" ? contextBackup.compressFallbackModel : contextBackup.compressModel) || null}
         title="Select Context Compact Model"
