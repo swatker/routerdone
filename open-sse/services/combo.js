@@ -124,6 +124,15 @@ function isAuthLockedComboError(errorBody) {
   return errorBody?.error?.comboCooldownReason === "auth_model_locked" || errorBody?.error?.code === "all_accounts_locked";
 }
 
+async function isAuthLockedComboResponse(response) {
+  if (!response) return false;
+  try {
+    return isAuthLockedComboError(await response.clone().json());
+  } catch {
+    return false;
+  }
+}
+
 // Flatten tool turns into prose so panel models keep the context but can't loop
 // on tools: drop the request's tools, turn tool/function results into assistant
 // text, and inline assistant tool_calls names instead of the structured field.
@@ -446,7 +455,14 @@ export async function handleComboChat({ body, models, handleSingleModel, log, co
           streamPreflightTimeoutMs: modelStreamPolicy.firstProductiveTimeoutMs,
         });
 
-        if (result.ok || isImmediateFallbackStatus(result.status) || !isTransientComboStatus(result.status) || attempt >= retryAttempts) {
+        // Locked-model responses are terminal for this model; retrying re-enters the same locked path and creates a retry storm.
+        const authLocked = isTransientComboStatus(result.status)
+          ? await isAuthLockedComboResponse(result)
+          : false;
+        if (result.ok || isImmediateFallbackStatus(result.status) || authLocked || !isTransientComboStatus(result.status) || attempt >= retryAttempts) {
+          if (authLocked && attempt < retryAttempts) {
+            log.info("COMBO", `${comboLogPrefix} | Model ${modelStr} auth/model locked, skip retry and try next model`);
+          }
           break;
         }
 
