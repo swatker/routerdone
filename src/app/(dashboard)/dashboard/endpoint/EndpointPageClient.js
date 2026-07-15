@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import PropTypes from "prop-types";
-import { Card, Button, Input, Modal, CardSkeleton, Toggle, ConfirmModal } from "@/shared/components";
+import { Card, Button, Input, Modal, CardSkeleton, Toggle, ConfirmModal, ModelSelectModal } from "@/shared/components";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 import { getCurrentLocale, onLocaleChange } from "@/i18n/runtime";
 import KeyLimitModal from "./components/KeyLimitModal";
@@ -52,6 +52,8 @@ export default function APIPageClient({ machineId }) {
   const [ponytailLevel, setPonytailLevel] = useState("full");
   const [contextBackup, setContextBackup] = useState({ enabled: true, thresholdTokens: 81000, retainRecentTurns: 3, codexConnectionId: "", compressModel: "" });
   const [availableModels, setAvailableModels] = useState([]);
+  const [activeProviders, setActiveProviders] = useState([]);
+  const [showCompactModelSelect, setShowCompactModelSelect] = useState(false);
   const [responsesCompactionEnabled, setResponsesCompactionEnabled] = useState(false);
   const [responsesCompactionThresholdTokens, setResponsesCompactionThresholdTokens] = useState(81000);
   const [locale, setLocale] = useState("en");
@@ -235,6 +237,16 @@ export default function APIPageClient({ machineId }) {
       setTsEnabled(tsEn);
       updateReachable(null, tsClientReachableRef, tsMissRef, setTsReachable, tsEverReachableRef, setTsEverReachable);
     } catch { /* ignore poll errors */ }
+  };
+
+  const loadProviders = async () => {
+    try {
+      const res = await fetch("/api/providers", { cache: "no-store" });
+      if (res.ok) {
+        const data = await res.json();
+        setActiveProviders(Array.isArray(data.connections) ? data.connections.filter((item) => item.isActive !== false) : []);
+      }
+    } catch { /* optional provider list */ }
   };
 
   const loadModels = async () => {
@@ -1427,7 +1439,7 @@ export default function APIPageClient({ machineId }) {
                 <label className="text-xs text-text-muted">tokens; keep turns</label>
                 <Input type="number" min="1" value={contextBackup.retainRecentTurns} onChange={(e) => setContextBackup((v) => ({ ...v, retainRecentTurns: e.target.value }))} onBlur={() => patchSetting({ routerDoneContextBackup: { ...contextBackup, retainRecentTurns: Number(contextBackup.retainRecentTurns) } })} className="w-20" />
                 <label className="text-xs text-text-muted">compact model</label>
-                <select value={contextBackup.compressModel || ""} onChange={(e) => { const value = e.target.value; setContextBackup((v) => ({ ...v, compressModel: value })); patchSetting({ routerDoneContextBackup: { ...contextBackup, compressModel: value } }); }} className="h-10 w-64 rounded-md border border-border bg-surface px-3 text-sm text-text-primary"><option value="">Local summary</option>{availableModels.map((item) => <option key={item.fullModel} value={item.fullModel}>{item.alias || item.model} ({item.provider})</option>)}{!availableModels.some((item) => item.model === "deepseek-v4-flash") && <option value="deepseek-v4-flash">deepseek-v4-flash (RouterDone)</option>}</select>
+                <Button size="sm" variant="secondary" onClick={() => setShowCompactModelSelect(true)}>{contextBackup.compressModel || "Local summary"}</Button>
               </div>
             )}
           </div>
@@ -1529,6 +1541,22 @@ export default function APIPageClient({ machineId }) {
         </div>
       </Card>
 
+
+      <ModelSelectModal
+        isOpen={showCompactModelSelect}
+        onClose={() => setShowCompactModelSelect(false)}
+        onSelect={(selection) => {
+          const value = selection?.value || "";
+          const next = { ...contextBackup, compressModel: value };
+          setContextBackup(next);
+          patchSetting({ routerDoneContextBackup: next });
+          setShowCompactModelSelect(false);
+        }}
+        activeProviders={activeProviders}
+        selectedModel={contextBackup.compressModel || null}
+        title="Select Context Compact Model"
+        closeOnSelect={true}
+      />
       {/* Add Key Modal */}
       <Modal
         isOpen={showAddModal}
