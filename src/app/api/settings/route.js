@@ -82,6 +82,15 @@ export async function PATCH(request) {
       };
     }
 
+    if (Object.prototype.hasOwnProperty.call(body, "responsesCompactionEnabled") || Object.prototype.hasOwnProperty.call(body, "responsesCompactionThresholdTokens")) {
+      const enabled = body.responsesCompactionEnabled === true;
+      const threshold = Number(body.responsesCompactionThresholdTokens ?? 81000);
+      if (!Number.isSafeInteger(threshold) || threshold < 1 || threshold > 10000000) {
+        return NextResponse.json({ error: "Invalid Responses compaction settings" }, { status: 400 });
+      }
+      body.responsesCompactionEnabled = enabled;
+      body.responsesCompactionThresholdTokens = threshold;
+    }
     if (Object.prototype.hasOwnProperty.call(body, "headroomCompressModel")) {
       if (typeof body.headroomCompressModel !== "string" || body.headroomCompressModel.length > 200) {
         return NextResponse.json({ error: "Invalid Headroom compression model" }, { status: 400 });

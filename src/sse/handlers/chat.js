@@ -405,6 +405,8 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       contextGuardMaxBytes: chatSettings.contextGuardMaxBytes,
       contextGuardKeepRecent: chatSettings.contextGuardKeepRecent,
       contextGuardHardCapTokens: chatSettings.contextGuardHardCapTokens,
+      responsesCompactionEnabled: chatSettings.responsesCompactionEnabled === true,
+      responsesCompactionThresholdTokens: chatSettings.responsesCompactionThresholdTokens,
       providerThinking,
       routeInfo,
       streamTimeoutPolicy: resolveRoutePolicy(routeMode, { stream: attemptContext.streamTimeoutPolicy, streamPreflightTimeoutMs: attemptContext.streamPreflightTimeoutMs }).stream,

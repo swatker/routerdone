@@ -51,6 +51,8 @@ export default function APIPageClient({ machineId }) {
   const [ponytailEnabled, setPonytailEnabled] = useState(false);
   const [ponytailLevel, setPonytailLevel] = useState("full");
   const [contextBackup, setContextBackup] = useState({ enabled: false, thresholdTokens: 45000, retainRecentTurns: 3, codexConnectionId: "" });
+  const [responsesCompactionEnabled, setResponsesCompactionEnabled] = useState(true);
+  const [responsesCompactionThresholdTokens, setResponsesCompactionThresholdTokens] = useState(81000);
   const [locale, setLocale] = useState("en");
 
   // Cloudflare Tunnel state
@@ -258,6 +260,8 @@ export default function APIPageClient({ machineId }) {
         setPonytailEnabled(!!data.ponytailEnabled);
         setPonytailLevel(data.ponytailLevel || "full");
         setContextBackup(data.routerDoneContextBackup || { enabled: false, thresholdTokens: 45000, retainRecentTurns: 3, codexConnectionId: "" });
+        setResponsesCompactionEnabled(data.responsesCompactionEnabled !== false);
+        setResponsesCompactionThresholdTokens(data.responsesCompactionThresholdTokens || 81000);
       }
       if (statusRes.ok) {
         const data = await statusRes.json();
@@ -1386,8 +1390,20 @@ export default function APIPageClient({ machineId }) {
             disabled={!headroomRunning}
             onChange={() => handleHeadroomEnabled(!headroomEnabled)}
           />
-        </div>
-        <div className="flex items-center justify-between pt-4 border-t border-border gap-4 flex-wrap">
+        </div>`n        <div className="flex items-center justify-between pt-4 border-t border-border gap-4 flex-wrap">
+          <div className="min-w-0 flex-1">
+            <p className="font-medium">OpenAI Responses server-side compaction</p>
+            <p className="text-sm text-text-muted mt-1">Native opaque compaction item; no separate compression model required.</p>
+            {responsesCompactionEnabled && (
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <label className="text-xs text-text-muted" htmlFor="responses-compaction-threshold">Compact from</label>
+                <Input id="responses-compaction-threshold" type="number" min="1" value={responsesCompactionThresholdTokens} onChange={(e) => setResponsesCompactionThresholdTokens(e.target.value)} onBlur={() => patchSetting({ responsesCompactionThresholdTokens: Number(responsesCompactionThresholdTokens) })} className="w-32" />
+                <span className="text-xs text-text-muted">tokens</span>
+              </div>
+            )}
+          </div>
+          <Toggle checked={responsesCompactionEnabled} onChange={() => { const next = !responsesCompactionEnabled; setResponsesCompactionEnabled(next); patchSetting({ responsesCompactionEnabled: next, responsesCompactionThresholdTokens: Number(responsesCompactionThresholdTokens) }); }} />
+        </div>`n        <div className="flex items-center justify-between pt-4 border-t border-border gap-4 flex-wrap">
           <div className="min-w-0 flex-1">
             <p className="font-medium">RouterDone context summary backup</p>
             <p className="text-sm text-text-muted mt-1">Optional context-summary backup for any target; enable only when needed.</p>
