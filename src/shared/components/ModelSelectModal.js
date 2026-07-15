@@ -33,6 +33,7 @@ export default function ModelSelectModal({
   kindFilter = null,
   addedModelValues = [],
   closeOnSelect = true,
+  showAllProviders = false,
 }) {
   // Filter activeProviders by serviceKinds when kindFilter set (e.g. "webSearch", "webFetch")
   const filteredActiveProviders = useMemo(() => {
@@ -206,8 +207,10 @@ export default function ModelSelectModal({
 
     // Only show connected providers (including both standard and custom)
     const providerIdsToShow = new Set([
-      ...activeConnectionIds,  // Only connected providers
-      ...noAuthIds,            // No-auth providers (kind-filtered)
+      ...activeConnectionIds,
+      ...noAuthIds,
+      ...(showAllProviders ? Object.keys(allProviders) : []),
+      ...(showAllProviders ? Object.values(modelAliases).filter((value) => typeof value === 'string').map((value) => value.split('/')[0]) : [])
     ]);
 
     // Sort by PROVIDER_ORDER
@@ -398,7 +401,7 @@ export default function ModelSelectModal({
     });
 
     return groups;
-  }, [filteredActiveProviders, modelAliases, allProviders, providerNodes, customModels, disabledModels, kindFilter, activeProviders, mergeLiveModels]);
+  }, [filteredActiveProviders, modelAliases, allProviders, providerNodes, customModels, disabledModels, kindFilter, activeProviders, mergeLiveModels, showAllProviders]);
 
   // Filter combos by search query (and hide combos when kindFilter is set — combos are LLM-only by design)
   const filteredCombos = useMemo(() => {
@@ -627,5 +630,6 @@ ModelSelectModal.propTypes = {
   kindFilter: PropTypes.string,
   addedModelValues: PropTypes.arrayOf(PropTypes.string),
   closeOnSelect: PropTypes.bool,
+  showAllProviders: PropTypes.bool,
 
 };

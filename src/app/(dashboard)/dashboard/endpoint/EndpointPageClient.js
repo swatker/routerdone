@@ -53,6 +53,7 @@ export default function APIPageClient({ machineId }) {
   const [contextBackup, setContextBackup] = useState({ enabled: true, thresholdTokens: 81000, retainRecentTurns: 3, codexConnectionId: "", compressModel: "" });
   const [availableModels, setAvailableModels] = useState([]);
   const [activeProviders, setActiveProviders] = useState([]);
+  const [modelAliases, setModelAliases] = useState({});
   const [showCompactModelSelect, setShowCompactModelSelect] = useState(false);
   const [compactModelSlot, setCompactModelSlot] = useState("primary");
   const [responsesCompactionEnabled, setResponsesCompactionEnabled] = useState(false);
@@ -238,6 +239,13 @@ export default function APIPageClient({ machineId }) {
       setTsEnabled(tsEn);
       updateReachable(null, tsClientReachableRef, tsMissRef, setTsReachable, tsEverReachableRef, setTsEverReachable);
     } catch { /* ignore poll errors */ }
+  };
+
+  const loadAliases = async () => {
+    try {
+      const res = await fetch("/api/models/alias", { cache: "no-store" });
+      if (res.ok) { const data = await res.json(); setModelAliases(data.aliases || data || {}); }
+    } catch { /* optional aliases */ }
   };
 
   const loadProviders = async () => {
@@ -1556,6 +1564,8 @@ export default function APIPageClient({ machineId }) {
           setShowCompactModelSelect(false);
         }}
         activeProviders={activeProviders}
+        modelAliases={modelAliases}
+        showAllProviders
         selectedModel={(compactModelSlot === "fallback" ? contextBackup.compressFallbackModel : contextBackup.compressModel) || null}
         title="Select Context Compact Model"
         closeOnSelect={true}
