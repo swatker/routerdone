@@ -40,7 +40,7 @@ const DEFAULT_CONTEXT_GUARD_KEEP_RECENT = Math.max(1, Number(process.env.CONTEXT
  * @param {object} options.credentials - Provider credentials
  * @param {string} options.sourceFormatOverride - Override detected source format (e.g. "openai-responses")
  */
-export async function handleChatCore({ body, modelInfo, credentials, log, onCredentialsRefreshed, onRequestSuccess, onDisconnect, clientRawRequest, connectionId, userAgent, apiKey, ccFilterNaming, rtkEnabled, headroomEnabled, headroomUrl, headroomCompressModel, headroomCompressUserMessages, headroomAdaptive, cavemanEnabled, cavemanLevel, ponytailEnabled, ponytailLevel, contextGuardEnabled, contextGuardMaxBytes, contextGuardKeepRecent, contextGuardHardCapTokens, responsesCompactionEnabled, responsesCompactionThresholdTokens, sourceFormatOverride, providerThinking, routeInfo = null, streamTimeoutPolicy = null, streamPreflightTimeoutMs = null }) {
+export async function handleChatCore({ body, modelInfo, credentials, log, onCredentialsRefreshed, onRequestSuccess, onDisconnect, clientRawRequest, connectionId, userAgent, apiKey, ccFilterNaming, rtkEnabled, headroomEnabled, headroomUrl, headroomCompressUserMessages, headroomAdaptive, cavemanEnabled, cavemanLevel, ponytailEnabled, ponytailLevel, contextGuardEnabled, contextGuardMaxBytes, contextGuardKeepRecent, contextGuardHardCapTokens, sourceFormatOverride, providerThinking, routeInfo = null, streamTimeoutPolicy = null, streamPreflightTimeoutMs = null }) {
   const { provider, model } = modelInfo;
   const requestStartTime = Date.now();
   const routeMode = routeInfo?.routeMode || (routeInfo?.comboName ? "combo" : "direct");
@@ -116,13 +116,6 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   // Skip all translation/normalization — only model and Bearer are swapped
   const clientTool = detectClientTool(clientRawRequest?.headers || {}, body);
   const passthrough = isNativePassthrough(clientTool, provider);
-  // Native OpenAI Responses compaction; provider returns opaque compaction items.
-  if (sourceFormat === FORMATS.OPENAI_RESPONSES && responsesCompactionEnabled === true && !body.context_management ) {
-    const threshold = Number(responsesCompactionThresholdTokens);
-    if (Number.isSafeInteger(threshold) && threshold >= 1) {
-      body = { ...body, context_management: [{ type: "compaction", compact_threshold: threshold }] };
-    }
-  }
 
   // Expose raw client headers to translators/executors for session-id resolution
   if (credentials) credentials.rawHeaders = clientRawRequest?.headers || {};
@@ -230,7 +223,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   headroomDiagnostics.ratioPercent = Math.round(headroomDecision.ratioPercent * 10) / 10;
   const headroomStats = headroomDecision.mode === "bypass"
     ? null
-    : await compressWithHeadroom(translatedBody, { enabled: true, url: headroomUrl, model: headroomCompressModel?.trim() || upstreamModel, format: finalFormat, compressUserMessages: headroomCompressUserMessages, timeoutMs: headroomDecision.timeoutMs, diagnostics: headroomDiagnostics });
+    : await compressWithHeadroom(translatedBody, { enabled: true, url: headroomUrl, model: upstreamModel, format: finalFormat, compressUserMessages: headroomCompressUserMessages, timeoutMs: headroomDecision.timeoutMs, diagnostics: headroomDiagnostics });
   const headroomLine = formatHeadroomSizeLog(headroomStats, headroomDiagnostics);
   if (headroomLine) log?.info?.("HEADROOM", headroomLine);
   if (headroomDecision.mode === "bypass") {
@@ -346,7 +339,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     }, headersDeadlineMs);
   }
   try {
-    const result = await executor.execute({ model, body: translatedBody, stream, credentials, signal: streamController.signal, log, proxyOptions, requestContext: { isCompact, disableInternalRetries: routeMode === "combo" || routeMode === "fusion" } });
+    const result = await executor.execute({ model, body: translatedBody, stream, credentials, signal: streamController.signal, log, proxyOptions, requestContext: { isCompact } });
     providerResponse = result.response;
     providerUrl = result.url;
     providerHeaders = result.headers;
@@ -388,7 +381,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
           try { await onCredentialsRefreshed(newCredentials); } catch (e) { log?.warn?.("TOKEN", `onCredentialsRefreshed failed: ${e.message}`); }
         }
         try {
-          const retryResult = await executor.execute({ model, body: translatedBody, stream, credentials, signal: streamController.signal, log, proxyOptions, requestContext: { isCompact, disableInternalRetries: routeMode === "combo" || routeMode === "fusion" } });
+          const retryResult = await executor.execute({ model, body: translatedBody, stream, credentials, signal: streamController.signal, log, proxyOptions, requestContext: { isCompact } });
           if (retryResult.response.ok) { providerResponse = retryResult.response; providerUrl = retryResult.url; }
         } catch { log?.warn?.("TOKEN", `${provider.toUpperCase()} | retry after refresh failed`); }
       } else {
@@ -420,7 +413,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     return createErrorResult(statusCode, errMsg, resetsAtMs);
   }
 
-  const sharedCtx = { provider, model, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, routeInfo };
+  const sharedCtx = { provider, model, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, routeInfo, rtkStats };
   const appendLog = (extra) => appendRequestLog({ model, provider, connectionId, ...extra }).catch(() => { });
   const trackDone = () => trackPendingRequest(model, provider, connectionId, false);
 
@@ -445,7 +438,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     : resolvedStreamPolicy;
 
   const retryEmptyStream = async () => {
-    const retryResult = await executor.execute({ model, body: translatedBody, stream, credentials, signal: streamController.signal, log, proxyOptions, requestContext: { isCompact, disableInternalRetries: routeMode === "combo" || routeMode === "fusion" } });
+    const retryResult = await executor.execute({ model, body: translatedBody, stream, credentials, signal: streamController.signal, log, proxyOptions, requestContext: { isCompact } });
     reqLogger.logTargetRequest(retryResult.url, retryResult.headers, retryResult.transformedBody);
     if (retryResult.transformedBody) finalBody = retryResult.transformedBody;
     return retryResult;

@@ -27,22 +27,55 @@ function estimateBackupTokens(body, format) {
   return Math.ceil(JSON.stringify(source || []).length / 4);
 }
 
-function applyContextSummaryBackup(body, settings, request) {
+async function applyContextSummaryBackup(body, settings, request) {
   let config;
   try { config = normalizeContextBackupConfig(settings?.routerDoneContextBackup); } catch { return body; }
+  if (!config.enabled || request.headers.get("x-routerdone-context-compact") === "1") return body;
   const pathname = new URL(request.url).pathname;
   const format = detectContextBackupFormat(body, pathname);
-  const details = { format: format || "unsupported", threshold: config.thresholdTokens };
-  if (!config.enabled) { log.info("CONTEXT-BACKUP", "skipped: disabled", details); return body; }
-  if (!format || !isContextBackupEligible(body, { format })) { log.info("CONTEXT-BACKUP", "skipped: unsafe or unsupported shape", details); return body; }
+  if (!format || !isContextBackupEligible(body, { format })) return body;
   const estimatedTokens = estimateBackupTokens(body, format);
-  if (estimatedTokens < config.thresholdTokens) { log.info("CONTEXT-BACKUP", "skipped: below threshold", { ...details, estimatedTokens }); return body; }
-  const backedUp = buildContextSummaryBackup(body, { ...config, format });
-  if (!backedUp) { log.info("CONTEXT-BACKUP", "skipped: insufficient turns/content", { ...details, estimatedTokens }); return body; }
-  log.info("CONTEXT-BACKUP", "applied", { ...details, estimatedTokens, originalItems: body[format === "responses" ? "input" : "messages"].length, backedUpItems: backedUp[format === "responses" ? "input" : "messages"].length });
-  return backedUp;
+  if (estimatedTokens < config.thresholdTokens) return body;
+
+  const key = format === "responses" ? "input" : "messages";
+  const keep = Math.max(1, config.retainRecentTurns) * 2;
+  const items = body[key];
+  const older = items.slice(0, -keep);
+  const recent = items.slice(-keep);
+  const lines = older.map((item) => `${item.role}: ${JSON.stringify(item.content)}`).join("\n");
+  let summaryText = "";
+  const compactModels = [config.compressModel, config.compressFallbackModel].filter((model, index, list) => model && list.indexOf(model) === index);
+  for (const compactModel of compactModels) {
+    if (summaryText) break;
+    try {
+      const compactRequest = new Request(new URL("/v1/chat/completions", request.url), {
+        method: "POST",
+        headers: new Headers({ "content-type": "application/json", "authorization": request.headers.get("authorization") || "", "x-routerdone-context-compact": "1" }),
+        body: JSON.stringify({ model: compactModel, stream: false, messages: [
+          { role: "system", content: "Summarize the older conversation faithfully. Preserve decisions, requirements, identifiers, errors, and unfinished work. Output only the compact summary." },
+          { role: "user", content: lines },
+        ] }),
+      });
+      const compactResponse = await handleChat(compactRequest);
+      const compactJson = await compactResponse.json();
+      summaryText = compactJson?.choices?.[0]?.message?.content || compactJson?.output_text || "";
+      if (summaryText) log.info("CONTEXT-BACKUP", `model=${compactModel} applied`);
+    } catch (error) {
+      log.warn("CONTEXT-BACKUP", `model ${compactModel} failed; trying fallback: ${error.message}`);
+    }
+  }  if (!summaryText) summaryText = `[RouterDone Context Summary Backup]\n${older.map((item) => `${item.role}: ${textOnlyForBackup(item.content)}`).join("\n")}`;
+  const summaryItem = format === "responses"
+    ? { type: "message", role: "system", content: [{ type: "input_text", text: summaryText }] }
+    : { role: "system", content: summaryText };
+  log.info("CONTEXT-BACKUP", `applied format=${format} estimatedTokens=${estimatedTokens} model=${config.compressModel || config.compressFallbackModel || "local"}`);
+  return { ...body, [key]: [summaryItem, ...recent] };
 }
 
+function textOnlyForBackup(value) {
+  if (typeof value === "string") return value.replace(/\s+/g, " ").trim();
+  if (Array.isArray(value)) return value.map((part) => part?.text || "").join(" ").replace(/\s+/g, " ").trim();
+  return "";
+}
 function maybeBackupBody(body, settings, request) {
   return applyContextSummaryBackup(body, settings, request);
 }
@@ -203,7 +236,6 @@ export async function handleChat(request, clientRawRequest = null) {
   // combos can feed the raw image to their first model and only preprocess
   // lazily if a non-vision fallback is actually tried.
   const comboModels = await getComboModels(modelStr);
-
   // Vision preprocessing: if body has images, preprocess through a vision model
   // to convert image blocks to OCR text. For combos with at least one
   // vision-capable member, defer this work — handleComboChat's auto-switch will
@@ -242,7 +274,7 @@ export async function handleChat(request, clientRawRequest = null) {
   }
 
   // Check if model is a combo (has multiple models with fallback)
-  body = maybeBackupBody(body, settings, request);
+  body = await maybeBackupBody(body, settings, request);
   if (comboModels) {
     // Check for combo-specific strategy first, fallback to global
     const comboStrategies = settings.comboStrategies || {};
@@ -480,6 +512,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       rtkEnabled: !!chatSettings.rtkEnabled,
       headroomEnabled: !!chatSettings.headroomEnabled,
       headroomUrl: chatSettings.headroomUrl || DEFAULT_HEADROOM_URL,
+      headroomCompressModel: chatSettings.headroomCompressModel || "",
       headroomCompressUserMessages: !!chatSettings.headroomCompressUserMessages,
       headroomAdaptive: chatSettings.headroomAdaptive,
       cavemanEnabled: !!chatSettings.cavemanEnabled,
@@ -490,6 +523,8 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       contextGuardMaxBytes: chatSettings.contextGuardMaxBytes,
       contextGuardKeepRecent: chatSettings.contextGuardKeepRecent,
       contextGuardHardCapTokens: chatSettings.contextGuardHardCapTokens,
+      responsesCompactionEnabled: chatSettings.responsesCompactionEnabled === true,
+      responsesCompactionThresholdTokens: chatSettings.responsesCompactionThresholdTokens,
       providerThinking,
       routeInfo,
       streamTimeoutPolicy: resolveRoutePolicy(routeMode, { stream: attemptContext.streamTimeoutPolicy, streamPreflightTimeoutMs: attemptContext.streamPreflightTimeoutMs }).stream,

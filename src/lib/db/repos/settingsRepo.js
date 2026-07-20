@@ -31,6 +31,7 @@ const DEFAULT_SETTINGS = {
   rtkEnabled: true,
   headroomEnabled: false,
   headroomUrl: DEFAULT_HEADROOM_URL,
+  headroomCompressModel: "",
   headroomCompressUserMessages: false,
   headroomAdaptive: {
     enabled: true,
@@ -48,11 +49,15 @@ const DEFAULT_SETTINGS = {
   contextGuardMaxBytes: 240_000,
   contextGuardKeepRecent: 3,
   contextGuardHardCapTokens: 0,
+  responsesCompactionEnabled: false,
+  responsesCompactionThresholdTokens: 81000,
   routerDoneContextBackup: {
-    enabled: false,
-    thresholdTokens: 45000,
+    enabled: true,
+    thresholdTokens: 81000,
     retainRecentTurns: 3,
     codexConnectionId: "",
+    compressModel: "",
+    compressFallbackModel: "",
   },
   consoleLogRetentionMs: 60 * 60 * 1000,
   modelRedirects: {

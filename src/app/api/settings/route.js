@@ -108,6 +108,22 @@ export async function PATCH(request) {
       };
     }
 
+    if (Object.prototype.hasOwnProperty.call(body, "responsesCompactionEnabled") || Object.prototype.hasOwnProperty.call(body, "responsesCompactionThresholdTokens")) {
+      const enabled = body.responsesCompactionEnabled === true;
+      const threshold = Number(body.responsesCompactionThresholdTokens ?? 81000);
+      if (!Number.isSafeInteger(threshold) || threshold < 1 || threshold > 10000000) {
+        return NextResponse.json({ error: "Invalid Responses compaction settings" }, { status: 400 });
+      }
+      body.responsesCompactionEnabled = enabled;
+      body.responsesCompactionThresholdTokens = threshold;
+    }
+    if (Object.prototype.hasOwnProperty.call(body, "headroomCompressModel")) {
+      if (typeof body.headroomCompressModel !== "string" || body.headroomCompressModel.length > 200) {
+        return NextResponse.json({ error: "Invalid Headroom compression model" }, { status: 400 });
+      }
+      body.headroomCompressModel = body.headroomCompressModel.trim();
+    }
+
     if (Object.prototype.hasOwnProperty.call(body, "routerDoneContextBackup")) {
       const cfg = body.routerDoneContextBackup;
       if (!cfg || typeof cfg !== "object" || Array.isArray(cfg)) {
@@ -115,7 +131,7 @@ export async function PATCH(request) {
       }
       const threshold = Number(cfg.thresholdTokens ?? 45000);
       const retain = Number(cfg.retainRecentTurns ?? 3);
-      if (typeof cfg.enabled !== "boolean" || !Number.isSafeInteger(threshold) || threshold < 36000 || !Number.isInteger(retain) || retain < 1 || retain > 6 || (cfg.codexConnectionId !== undefined && typeof cfg.codexConnectionId !== "string")) {
+      if (typeof cfg.enabled !== "boolean" || !Number.isSafeInteger(threshold) || threshold < 36000 || !Number.isInteger(retain) || retain < 1 || retain > 6 || (cfg.codexConnectionId !== undefined && typeof cfg.codexConnectionId !== "string") || (cfg.compressModel !== undefined && (typeof cfg.compressModel !== "string" || cfg.compressModel.length > 200)) || (cfg.compressFallbackModel !== undefined && (typeof cfg.compressFallbackModel !== "string" || cfg.compressFallbackModel.length > 200))) {
         return NextResponse.json({ error: "Invalid context backup settings" }, { status: 400 });
       }
       body.routerDoneContextBackup = {
@@ -123,6 +139,8 @@ export async function PATCH(request) {
         thresholdTokens: threshold,
         retainRecentTurns: retain,
         codexConnectionId: cfg.codexConnectionId || "",
+        compressModel: typeof cfg.compressModel === "string" ? cfg.compressModel.trim() : "",
+        compressFallbackModel: typeof cfg.compressFallbackModel === "string" ? cfg.compressFallbackModel.trim() : "",
       };
     }
 

@@ -95,6 +95,9 @@ export const ERROR_RULES = [
   { text: "upstream first productive timeout", cooldownMs: PROVIDER_SELF_HEAL_COOLDOWN_MS_DEFAULT, selfHeal: true },
   { text: "upstream stalled",                  cooldownMs: PROVIDER_SELF_HEAL_COOLDOWN_MS_DEFAULT, selfHeal: true },
   { text: "upstream headers timeout",          cooldownMs: PROVIDER_SELF_HEAL_COOLDOWN_MS_DEFAULT, selfHeal: true },
+  { status: 502, cooldownMs: PROVIDER_SELF_HEAL_COOLDOWN_MS_DEFAULT, selfHeal: true },
+  { status: 503, cooldownMs: PROVIDER_SELF_HEAL_COOLDOWN_MS_DEFAULT, selfHeal: true },
+  { status: 504, cooldownMs: PROVIDER_SELF_HEAL_COOLDOWN_MS_DEFAULT, selfHeal: true },
   // --- Request/provider surface errors: short auto-heal, do not mark account dead ---
   { text: "context_too_large",        cooldownMs: PROVIDER_SELF_HEAL_COOLDOWN_MS_DEFAULT, selfHeal: true },
   { text: "input tokens exceed",      cooldownMs: PROVIDER_SELF_HEAL_COOLDOWN_MS_DEFAULT, selfHeal: true },

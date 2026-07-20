@@ -1,8 +1,8 @@
-﻿"use client";
+"use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import PropTypes from "prop-types";
-import { Card, Button, Input, Modal, CardSkeleton, Toggle, ConfirmModal } from "@/shared/components";
+import { Card, Button, Input, Modal, CardSkeleton, Toggle, ConfirmModal, ModelSelectModal } from "@/shared/components";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 import { getCurrentLocale, onLocaleChange } from "@/i18n/runtime";
 import KeyLimitModal from "./components/KeyLimitModal";
@@ -38,6 +38,7 @@ export default function APIPageClient({ machineId }) {
   const [rtkEnabled, setRtkEnabledState] = useState(true);
   const [headroomEnabled, setHeadroomEnabled] = useState(false);
   const [headroomUrl, setHeadroomUrl] = useState("http://localhost:8787");
+  const [headroomCompressModel, setHeadroomCompressModel] = useState("");
   const [headroomCompressUserMessages, setHeadroomCompressUserMessages] = useState(false);
   const [headroomAdaptive, setHeadroomAdaptive] = useState({ enabled: true, softThresholdPercent: 70, mandatoryThresholdPercent: 85, compactThresholdPercent: 95, softTimeoutMs: 1500, mandatoryTimeoutMs: 3000 });
   const [headroomAdaptiveError, setHeadroomAdaptiveError] = useState("");
@@ -49,7 +50,14 @@ export default function APIPageClient({ machineId }) {
   const [cavemanLevel, setCavemanLevel] = useState("full");
   const [ponytailEnabled, setPonytailEnabled] = useState(false);
   const [ponytailLevel, setPonytailLevel] = useState("full");
-  const [contextBackup, setContextBackup] = useState({ enabled: false, thresholdTokens: 45000, retainRecentTurns: 3, codexConnectionId: "" });
+  const [contextBackup, setContextBackup] = useState({ enabled: true, thresholdTokens: 81000, retainRecentTurns: 3, codexConnectionId: "", compressModel: "" });
+  const [availableModels, setAvailableModels] = useState([]);
+  const [activeProviders, setActiveProviders] = useState([]);
+  const [modelAliases, setModelAliases] = useState({});
+  const [showCompactModelSelect, setShowCompactModelSelect] = useState(false);
+  const [compactModelSlot, setCompactModelSlot] = useState("primary");
+  const [responsesCompactionEnabled, setResponsesCompactionEnabled] = useState(false);
+  const [responsesCompactionThresholdTokens, setResponsesCompactionThresholdTokens] = useState(81000);
   const [locale, setLocale] = useState("en");
 
   // Cloudflare Tunnel state
@@ -233,6 +241,33 @@ export default function APIPageClient({ machineId }) {
     } catch { /* ignore poll errors */ }
   };
 
+  const loadAliases = async () => {
+    try {
+      const res = await fetch("/api/models/alias", { cache: "no-store" });
+      if (res.ok) { const data = await res.json(); setModelAliases(data.aliases || data || {}); }
+    } catch { /* optional aliases */ }
+  };
+
+  const loadProviders = async () => {
+    try {
+      const res = await fetch("/api/providers", { cache: "no-store" });
+      if (res.ok) {
+        const data = await res.json();
+        setActiveProviders(Array.isArray(data.connections) ? data.connections : []);
+      }
+    } catch { /* optional provider list */ }
+  };
+
+  const loadModels = async () => {
+    try {
+      const res = await fetch("/api/models", { cache: "no-store" });
+      if (res.ok) {
+        const data = await res.json();
+        setAvailableModels(Array.isArray(data.models) ? data.models : []);
+      }
+    } catch { /* optional model list */ }
+  };
+
   const loadSettings = async () => {
     setTunnelChecking(true);
     try {
@@ -256,7 +291,9 @@ export default function APIPageClient({ machineId }) {
         setCavemanLevel(data.cavemanLevel || "full");
         setPonytailEnabled(!!data.ponytailEnabled);
         setPonytailLevel(data.ponytailLevel || "full");
-        setContextBackup(data.routerDoneContextBackup || { enabled: false, thresholdTokens: 45000, retainRecentTurns: 3, codexConnectionId: "" });
+        setContextBackup(data.routerDoneContextBackup || { enabled: true, thresholdTokens: 81000, retainRecentTurns: 3, codexConnectionId: "", compressModel: "", compressFallbackModel: "" });
+        setResponsesCompactionEnabled(data.responsesCompactionEnabled === true);
+        setResponsesCompactionThresholdTokens(data.responsesCompactionThresholdTokens || 81000);
       }
       if (statusRes.ok) {
         const data = await statusRes.json();
@@ -1358,6 +1395,13 @@ export default function APIPageClient({ machineId }) {
             <p className="text-sm text-text-muted mt-1">
               Adaptive compression via /v1/compress; small requests bypass the extra hop
             </p>
+            {headroomRunning && (
+              <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+                <label className="text-text-muted" htmlFor="headroom-compress-model">Compression model</label>
+                <Input id="headroom-compress-model" value={headroomCompressModel} placeholder="Use routed model" onChange={(e) => setHeadroomCompressModel(e.target.value)} onBlur={() => patchSetting({ headroomCompressModel: headroomCompressModel.trim() })} className="w-56" />
+                <span className="text-text-muted">Optional: provider/model</span>
+              </div>
+            )}
             {headroomEnabled && headroomRunning && (
               <div className="mt-3 flex gap-2 flex-wrap items-center text-xs">
                 <label className="text-text-muted">Start %</label>
@@ -1381,6 +1425,20 @@ export default function APIPageClient({ machineId }) {
         </div>
         <div className="flex items-center justify-between pt-4 border-t border-border gap-4 flex-wrap">
           <div className="min-w-0 flex-1">
+            <p className="font-medium">OpenAI Responses server-side compaction (chỉ khi upstream hỗ trợ /v1/responses)</p>
+            <p className="text-sm text-text-muted mt-1">Native opaque compaction item; no separate compression model required.</p>
+            {responsesCompactionEnabled && (
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <label className="text-xs text-text-muted" htmlFor="responses-compaction-threshold">Compact from</label>
+                <Input id="responses-compaction-threshold" type="number" min="1" value={responsesCompactionThresholdTokens} onChange={(e) => setResponsesCompactionThresholdTokens(e.target.value)} onBlur={() => patchSetting({ responsesCompactionThresholdTokens: Number(responsesCompactionThresholdTokens) })} className="w-32" />
+                <span className="text-xs text-text-muted">tokens</span>
+              </div>
+            )}
+          </div>
+          <Toggle checked={responsesCompactionEnabled} onChange={() => { const next = !responsesCompactionEnabled; setResponsesCompactionEnabled(next); patchSetting({ responsesCompactionEnabled: next, responsesCompactionThresholdTokens: Number(responsesCompactionThresholdTokens) }); }} />
+        </div>
+        <div className="flex items-center justify-between pt-4 border-t border-border gap-4 flex-wrap">
+          <div className="min-w-0 flex-1">
             <p className="font-medium">RouterDone context summary backup</p>
             <p className="text-sm text-text-muted mt-1">Optional context-summary backup for any target; enable only when needed.</p>
             {contextBackup.enabled && (
@@ -1389,6 +1447,10 @@ export default function APIPageClient({ machineId }) {
                 <Input type="number" min="36000" step="1" value={contextBackup.thresholdTokens} onChange={(e) => setContextBackup((v) => ({ ...v, thresholdTokens: e.target.value }))} onBlur={() => patchSetting({ routerDoneContextBackup: { ...contextBackup, thresholdTokens: Number(contextBackup.thresholdTokens) } })} className="w-32" />
                 <label className="text-xs text-text-muted">tokens; keep turns</label>
                 <Input type="number" min="1" value={contextBackup.retainRecentTurns} onChange={(e) => setContextBackup((v) => ({ ...v, retainRecentTurns: e.target.value }))} onBlur={() => patchSetting({ routerDoneContextBackup: { ...contextBackup, retainRecentTurns: Number(contextBackup.retainRecentTurns) } })} className="w-20" />
+                <label className="text-xs text-text-muted">compact model</label>
+                <Button size="sm" variant="secondary" onClick={() => { setCompactModelSlot("primary"); setShowCompactModelSelect(true); }}>{contextBackup.compressModel || "Local summary"}</Button>
+                <label className="text-xs text-text-muted">fallback</label>
+                <Button size="sm" variant="secondary" onClick={() => { setCompactModelSlot("fallback"); setShowCompactModelSelect(true); }}>{contextBackup.compressFallbackModel || "Local summary"}</Button>
               </div>
             )}
           </div>
@@ -1490,6 +1552,25 @@ export default function APIPageClient({ machineId }) {
         </div>
       </Card>
 
+
+      <ModelSelectModal
+        isOpen={showCompactModelSelect}
+        onClose={() => setShowCompactModelSelect(false)}
+        onSelect={(selection) => {
+          const value = selection?.value || "";
+          const next = { ...contextBackup, [compactModelSlot === "fallback" ? "compressFallbackModel" : "compressModel"]: value };
+          setContextBackup(next);
+          patchSetting({ routerDoneContextBackup: next });
+          setShowCompactModelSelect(false);
+        }}
+        activeProviders={activeProviders}
+        modelAliases={modelAliases}
+        availableModels={availableModels}
+        showAllProviders
+        selectedModel={(compactModelSlot === "fallback" ? contextBackup.compressFallbackModel : contextBackup.compressModel) || null}
+        title="Select Context Compact Model"
+        closeOnSelect={true}
+/>
       {/* Add Key Modal */}
       <Modal
         isOpen={showAddModal}

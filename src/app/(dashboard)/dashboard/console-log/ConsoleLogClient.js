@@ -164,12 +164,16 @@ function LogRow({ entry, timeZone, compact }) {
   }
 
   const clock = formatClock(entry.createdAt, timeZone) || "--:--:--";
-  const status = request.status ?? 200;
+  const status = request.status ?? 200; const statusLabel = status === 200 ? "OK" : status === 429 ? "RATE" : status === 403 ? "AUTH" : status === 401 ? "AUTH" : status === 402 ? "BILL" : status >= 500 ? "SRV" : status >= 400 ? "ERR" : String(status);
   const isErr = status >= 400;
   const is5xx = status >= 500;
   const tokens = request.tokens || {};
   const input = tokens.input_tokens ?? tokens.prompt_tokens ?? 0;
   const output = tokens.output_tokens ?? tokens.completion_tokens ?? 0;
+  const cacheRead = tokens.cache_read_input_tokens ?? tokens.cached_tokens ?? 0;
+  const reasoning = tokens.reasoning_tokens ?? 0;
+  const cacheCreate = tokens.cache_creation_input_tokens ?? 0;
+  const rtk = request.rtkSavings ?? null;
   const provider = request.displayProvider || request.provider || "?";
   const model = request.model || "?";
   const combo = request.comboName;
@@ -185,7 +189,7 @@ function LogRow({ entry, timeZone, compact }) {
     <tr className={"border-b border-white/[0.02] hover:bg-white/[0.03] " + (isErr ? "bg-red-500/5" : "")}>
       <td className="px-2 py-1.5 text-text-muted tabular-nums">{clock}</td>
       <td className="px-2 py-1.5">
-        <span className={"inline-block rounded px-1.5 py-0.5 text-[10px] font-bold tabular-nums " + statusBadge}>{status}</span>
+        <span className={"inline-block rounded px-1.5 py-0.5 text-[10px] font-bold tabular-nums " + statusBadge}>{statusLabel}</span>
       </td>
       {!compact && (
         <td className="px-2 py-1.5">
@@ -200,8 +204,12 @@ function LogRow({ entry, timeZone, compact }) {
       <td className="px-2 py-1.5 text-amber-300 tabular-nums">{duration}ms{request.ttft > 0 ? <span className="text-text-muted ml-1">T{Math.round(request.ttft)}</span> : null}</td>
       <td className="px-2 py-1.5">
         <span className="text-emerald-300 tabular-nums">{input}</span>
+        {cacheRead > 0 && <span className="text-emerald-500/50 tabular-nums text-[9px] ml-0.5">+{cacheRead}c</span>}
         <span className="text-text-muted">/</span>
         <span className="text-sky-300 tabular-nums">{output}</span>
+        {reasoning > 0 && <span className="text-purple-400/50 tabular-nums text-[9px] ml-0.5">+{reasoning}t</span>}
+        {cacheCreate > 0 && <span className="text-amber-400/50 tabular-nums text-[9px] ml-0.5">w{cacheCreate}</span>}
+        {rtk && <span className="text-amber-400/40 text-[9px] ml-1">&#x1F53B;{rtk}</span>}
       </td>
     </tr>
   );

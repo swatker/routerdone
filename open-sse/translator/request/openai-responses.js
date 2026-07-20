@@ -202,7 +202,24 @@ function normalizeToolParameters(params) {
  */
 export function openaiToOpenAIResponsesRequest(model, body, stream, credentials) {
   // Body already in Responses API format (e.g. Cursor CLI calling /chat/completions with input[])
-  if (body.input) return { ...body, model, stream: true };
+  if (body.input) {
+    const normalized = { ...body, model, stream: true, input: normalizeResponsesInput(body.input) };
+    if (Array.isArray(normalized.input)) {
+      normalized.input = normalized.input.map((item) => ({
+        ...item,
+        ...(Array.isArray(item?.content) ? {
+          content: item.content.map((content) => {
+            if (content?.type !== RESPONSES_ITEM.INPUT_IMAGE) return content;
+            const url = typeof content.image_url === "string" ? content.image_url : content.image_url?.url;
+            return typeof url === "string" && url.length > 0
+              ? { ...content, image_url: url }
+              : { type: RESPONSES_ITEM.INPUT_TEXT, text: "[image omitted: missing image reference]" };
+          }),
+        } : {}),
+      }));
+    }
+    return normalized;
+  }
 
   const result = {
     model,
@@ -243,8 +260,8 @@ export function openaiToOpenAIResponsesRequest(model, body, stream, credentials)
             }
             if (c.type === RESPONSES_ITEM.INPUT_IMAGE) {
               const url = typeof c.image_url === "string" ? c.image_url : c.image_url?.url;
-              if (typeof url !== "string" || (url.startsWith("data:") ? !isValidImageDataUri(url) : !/^https?:\/\/\S+$/i.test(url))) {
-                return { type: contentType, text: "[image omitted: invalid image data]" };
+              if (typeof url !== "string" || url.length === 0) {
+                return { type: contentType, text: "[image omitted: missing image reference]" };
               }
               return { ...c, image_url: url };
             }

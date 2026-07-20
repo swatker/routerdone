@@ -66,12 +66,20 @@ function appendLine(line, request = null) {
   state.emitter.emit("line", entry);
 }
 
-function formatRequestLog({ status = 200, stream = false, provider, model, duration = 0, ttft = 0, tokens = {}, displayProvider = null, comboName = null }) {
+function formatRequestLog({ status = 200, stream = false, provider, model, duration = 0, ttft = 0, tokens = {}, displayProvider = null, comboName = null, rtkSavings = null }) {
   const inputTokens = tokens.input_tokens ?? tokens.prompt_tokens ?? 0;
   const outputTokens = tokens.output_tokens ?? tokens.completion_tokens ?? 0;
+  const cacheRead = tokens.cache_read_input_tokens ?? tokens.cached_tokens ?? 0;
+  const reasoning = tokens.reasoning_tokens ?? 0;
+  const cacheCreate = tokens.cache_creation_input_tokens ?? 0;
   const name = displayProvider || (provider || "unknown").slice(0, 25);
   const combo = comboName ? `[${comboName}] ` : "";
-  return `[${status}] stream:${Boolean(stream)} ${combo}${name}/${model || "unknown"} | ${Math.max(0, Math.round(duration))}ms (TTFT ${Math.max(0, Math.round(ttft))}) | In: ${inputTokens} | Out: ${outputTokens}`;
+  let line = `[${status}] stream:${Boolean(stream)} ${combo}${name}/${model || "unknown"} | ${Math.max(0, Math.round(duration))}ms (TTFT ${Math.max(0, Math.round(ttft))}) | In: ${inputTokens} | Out: ${outputTokens}`;
+  if (cacheRead > 0) line += ` | Cache: ${cacheRead}`;
+  if (reasoning > 0) line += ` | Think: ${reasoning}`;
+  if (cacheCreate > 0) line += ` | CacheW: ${cacheCreate}`;
+  if (rtkSavings) line += ` | RTK: ${rtkSavings}`;
+  return line;
 }
 
 export function appendRequestConsoleLog(request) {

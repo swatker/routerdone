@@ -16,6 +16,8 @@ export function normalizeContextBackupConfig(config = {}) {
     thresholdTokens,
     retainRecentTurns,
     codexConnectionId: typeof config.codexConnectionId === "string" ? config.codexConnectionId : "",
+    compressModel: typeof config.compressModel === "string" ? config.compressModel.trim().slice(0, 200) : "",
+    compressFallbackModel: typeof config.compressFallbackModel === "string" ? config.compressFallbackModel.trim().slice(0, 200) : "",
   };
 }
 
