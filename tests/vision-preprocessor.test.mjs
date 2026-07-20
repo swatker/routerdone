@@ -644,3 +644,56 @@ test("P3: older-message image restores cached description (no extra vision call)
   }
 });
 
+
+// ── BUG #1 (regression): changing visionMaxTokens must invalidate cache ───────
+// The Vision Bridge UI exposes a "Max Tokens" dropdown (1024/2048/4096) that
+// controls the loopback vision call's output budget. If the cache key omits
+// maxTokens, raising the budget silently serves the old short description
+// instead of regenerating a richer one — the UI setting has no effect until
+// the 6h TTL expires. The cache key MUST include the budget so toggling
+// regenerates descriptions.
+test("cache: same image but different visionMaxTokens misses cache", async () => {
+  clearVisionDescriptionCache();
+  const calls = [];
+  const fakeFetch = (url, opts) => {
+    calls.push(JSON.parse(opts.body));
+    return Promise.resolve({
+      ok: true,
+      headers: { get: () => "application/json" },
+      json: () => Promise.resolve({
+        choices: [{ message: { content: "description with budget " + calls.length } }],
+      }),
+    });
+  };
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = fakeFetch;
+
+  try {
+    const body = {
+      model: "combo/zcode",
+      stream: false,
+      messages: [{ role: "user", content: [
+        { type: "text", text: "describe this" },
+        { type: "image_url", image_url: { url: FAKE_IMG } },
+      ] }],
+    };
+
+    // First call with 1024 budget
+    const settings1 = { visionPreprocessingEnabled: true, visionPreprocessingModel: "oc/mimo-v2.5-free", visionMaxTokens: 1024 };
+    await preprocessVisionContent({ ...body, messages: structuredClone(body.messages) }, settings1, noLog, { vision: false });
+
+    // Second call with 4096 budget — same image, same model, only maxTokens changed
+    const settings2 = { visionPreprocessingEnabled: true, visionPreprocessingModel: "oc/mimo-v2.5-free", visionMaxTokens: 4096 };
+    await preprocessVisionContent({ ...body, messages: structuredClone(body.messages) }, settings2, noLog, { vision: false });
+
+    assert.equal(calls.length, 2, "same image with different maxTokens budget should miss cache and call vision model again");
+    const stats = getVisionDescriptionCacheStats();
+    assert.equal(stats.size, 2, "cache should have 2 entries (one per budget)");
+    assert.equal(stats.hits, 0, "second call should be a miss, not a hit");
+    assert.equal(stats.misses, 2, "both calls should miss");
+  } finally {
+    globalThis.fetch = originalFetch;
+    clearVisionDescriptionCache();
+  }
+});

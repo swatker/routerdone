@@ -76,8 +76,10 @@ export default function ToolsPageClient() {
   }, []);
 
   const handleEnabled = async (value) => {
+    const prev = visionPreprocessingEnabled;
     setVisionPreprocessingEnabled(value);
-    await patchSetting({ visionPreprocessingEnabled: value });
+    const ok = await patchSetting({ visionPreprocessingEnabled: value });
+    if (!ok) setVisionPreprocessingEnabled(prev);
   };
 
   const handleModel = async (event) => {
@@ -86,8 +88,10 @@ export default function ToolsPageClient() {
     const safe = VISION_MODEL_OPTIONS.some((o) => o.value === value)
       ? value
       : "oc/mimo-v2.5-free";
+    const prev = visionPreprocessingModel;
     setVisionPreprocessingModel(safe);
-    await patchSetting({ visionPreprocessingModel: safe });
+    const ok = await patchSetting({ visionPreprocessingModel: safe });
+    if (!ok) setVisionPreprocessingModel(prev);
   };
 
   const handleMaxTokens = async (event) => {
@@ -95,13 +99,17 @@ export default function ToolsPageClient() {
     const safe = VISION_MAX_TOKENS_OPTIONS.some((o) => Number(o.value) === raw)
       ? raw
       : 1024;
+    const prev = visionMaxTokens;
     setVisionMaxTokens(safe);
-    await patchSetting({ visionMaxTokens: safe });
+    const ok = await patchSetting({ visionMaxTokens: safe });
+    if (!ok) setVisionMaxTokens(prev);
   };
 
   const handleUiUxOverride = async (value) => {
+    const prev = visionUiUxOverride;
     setVisionUiUxOverride(value);
-    await patchSetting({ visionUiUxOverride: value });
+    const ok = await patchSetting({ visionUiUxOverride: value });
+    if (!ok) setVisionUiUxOverride(prev);
   };
 
   if (loading) {
@@ -142,6 +150,7 @@ export default function ToolsPageClient() {
               onChange={handleEnabled}
               label="Enable Vision Polyfill"
               description="Khi bật, ảnh trong request sẽ được mimo-v2.5-free mô tả trước khi gửi tới model đích không hỗ trợ vision. Tắt để truyền ảnh nguyên bản (model đích có thể từ chối)."
+              disabled={saving}
             />
           </div>
 
@@ -173,6 +182,7 @@ export default function ToolsPageClient() {
               onChange={handleUiUxOverride}
               label="UI/UX Design Context Override"
               description="Đổi prompt sang phân tích giao diện: OCR + bối cảnh UI/UX + đề xuất ngắn. Luôn dùng 4096 tokens để không bị cắt. Tắt để dùng chế độ OCR+caption mặc định."
+              disabled={saving}
             />
           </div>
         </div>

@@ -38,7 +38,11 @@ const VISION_MAX_ATTEMPTS = 2;
 // Override instruction mode + per-request max_tokens budget. Old cache entries
 // keyed under v1 are intentionally invalidated so descriptions are regenerated
 // with the new instruction/prompt shape.
-const VISION_INSTRUCTION_VERSION = "v2";
+// Bumped v2 -> v3 when max_tokens budget was added to the cache key — without
+// it, raising visionMaxTokens from the Tools tab silently served the old
+// short description instead of regenerating a richer one (UI had no effect
+// until the 6h TTL expired).
+const VISION_INSTRUCTION_VERSION = "v3";
 const VISION_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const VISION_CACHE_MAX_ENTRIES = 500;
 
@@ -147,7 +151,7 @@ function hashImageUrl(url) {
   return "url:" + sha256Hex(url);
 }
 
-function buildVisionCacheKey(visionModel, imageBlocks, instructionMode) {
+function buildVisionCacheKey(visionModel, imageBlocks, instructionMode, maxTokens) {
   const imageHashes = [];
   for (const block of imageBlocks || []) {
     const url = imageUrlFromBlock(block);
@@ -160,11 +164,17 @@ function buildVisionCacheKey(visionModel, imageBlocks, instructionMode) {
   // UI/UX design-context descriptions, so toggling the override regenerates
   // with the right prompt instead of serving the wrong cached text.
   const mode = instructionMode === "uiux" ? "uiux" : "standard";
+  // maxTokens is part of the key so raising the budget from the Tools tab
+  // invalidates the old short description and regenerates a richer one —
+  // without this the UI dropdown had no effect until the 6h TTL expired.
+  // (UI/UX override forces 4096, so its key is stable for a given image.)
+  const budget = Number.isFinite(maxTokens) && maxTokens > 0 ? maxTokens : 0;
   return [
     "vision-description",
     VISION_INSTRUCTION_VERSION,
     mode,
     visionModel || VISION_MODEL_DEFAULT,
+    String(budget),
     ...imageHashes,
   ].join("|");
 }
@@ -570,7 +580,7 @@ export async function preprocessVisionContent(body, settings, log, targetCaps, o
     try {
       const oldBlocks = await extractImagesFromMessage(msg, log);
       if (oldBlocks.length) {
-        const oldKey = buildVisionCacheKey(visionModel, oldBlocks, instructionMode);
+        const oldKey = buildVisionCacheKey(visionModel, oldBlocks, instructionMode, maxTokens);
         const oldCached = getCachedVisionDescription(oldKey);
         if (oldCached) {
           messages[mi] = stripImagesFromMessage(msg, "[Image description: " + oldCached + "]");
@@ -610,7 +620,7 @@ export async function preprocessVisionContent(body, settings, log, targetCaps, o
     return null;
   }
 
-  const cacheKey = buildVisionCacheKey(visionModel, imageBlocks, instructionMode);
+  const cacheKey = buildVisionCacheKey(visionModel, imageBlocks, instructionMode, maxTokens);
   const cachedVisionText = getCachedVisionDescription(cacheKey);
   if (cachedVisionText) {
     messages[lastUserIdx] = stripImagesFromMessage(lastMsg, "[Image description: " + cachedVisionText + "]");
