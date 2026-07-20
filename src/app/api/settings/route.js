@@ -50,6 +50,32 @@ export async function PATCH(request) {
       body.consoleLogRetentionMs = value;
     }
 
+    // Vision Bridge (Tools tab) — validate the 4 settings surfaced in the UI.
+    // The vision model is hard-pinned to oc/mimo-v2.5-free (the only free
+    // vision model). We never accept a paid vision model string here, so the
+    // toggle can't be used to route vision spend through Claude/Gemini/GPT.
+    if (Object.prototype.hasOwnProperty.call(body, "visionPreprocessingEnabled")) {
+      body.visionPreprocessingEnabled = body.visionPreprocessingEnabled === true;
+    }
+    if (Object.prototype.hasOwnProperty.call(body, "visionPreprocessingModel")) {
+      const allowedVisionModels = ["oc/mimo-v2.5-free"];
+      if (!allowedVisionModels.includes(body.visionPreprocessingModel)) {
+        return NextResponse.json({ error: "Vision model is pinned to oc/mimo-v2.5-free (free tier only)" }, { status: 400 });
+      }
+      body.visionPreprocessingModel = "oc/mimo-v2.5-free";
+    }
+    if (Object.prototype.hasOwnProperty.call(body, "visionMaxTokens")) {
+      const allowedBudgets = [1024, 2048, 4096];
+      const budget = Number(body.visionMaxTokens);
+      if (!allowedBudgets.includes(budget)) {
+        return NextResponse.json({ error: "Invalid vision max tokens (allowed: 1024, 2048, 4096)" }, { status: 400 });
+      }
+      body.visionMaxTokens = budget;
+    }
+    if (Object.prototype.hasOwnProperty.call(body, "visionUiUxOverride")) {
+      body.visionUiUxOverride = body.visionUiUxOverride === true;
+    }
+
     if (Object.prototype.hasOwnProperty.call(body, "headroomAdaptive")) {
       const cfg = body.headroomAdaptive;
       const defaults = {

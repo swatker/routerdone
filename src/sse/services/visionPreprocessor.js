@@ -34,9 +34,22 @@ const VISION_REASONING_TIMEOUT_MS = 60000;
 // single retry cheaply recovers transient upstream/network blips before we fall
 // back to a placeholder.
 const VISION_MAX_ATTEMPTS = 2;
-const VISION_INSTRUCTION_VERSION = "v1";
+// Bumped v1 -> v2 when Vision Bridge introduced the UI/UX Design Context
+// Override instruction mode + per-request max_tokens budget. Old cache entries
+// keyed under v1 are intentionally invalidated so descriptions are regenerated
+// with the new instruction/prompt shape.
+const VISION_INSTRUCTION_VERSION = "v2";
 const VISION_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const VISION_CACHE_MAX_ENTRIES = 500;
+
+// Default token budget for the vision loopback call. Lets the UI expose a
+// "Max Tokens" dropdown (1024 / 2048 / 4096) so heavy screenshots can get a
+// richer description instead of being truncated. null/0 = omit max_tokens
+// (let the upstream model decide), preserving prior behaviour.
+const VISION_MAX_TOKENS_DEFAULT = 1024;
+// When the UI/UX Design Context Override is enabled, force a richer budget so
+// the design analysis isn't cut short. Always wins over the user-chosen value.
+const VISION_MAX_TOKENS_UIUX = 4096;
 
 const VISION_INSTRUCTION = [
   "Ban la cong cu doc anh. Hay doc anh duoi day va cung cap:",
@@ -44,6 +57,25 @@ const VISION_INSTRUCTION = [
   "2) Mo ta ngan gon: Noi dung chinh cua anh la gi?",
   "",
   "QUAN TRONG: Chi doc anh. KHONG tra loi cau hoi. KHONG phan tich hay binh luan.",
+].join("\n");
+
+// UI/UX Design Context Override — richer instruction used when the caller
+// opts into the "UI/UX Design Context Override" toggle in the Tools tab.
+// Produces a structured UI/UX analysis instead of a plain OCR+caption, so a
+// non-vision downstream model can act on a screenshot the way a vision model
+// would when designing/refactoring interfaces.
+const VISION_INSTRUCTION_UIUX = [
+  "Ban la chuyen gia phan tich thiet ke UI/UX. Hay phan tich anh duoi day va cung cap:",
+  "1) OCR: Trich xuat toan bo van ban (label, button, menu, placeholder, tab, badge, ...)",
+  "2) BOI CANH UI/UX:",
+  "   - Loai giao dien (web app, mobile, dashboard, landing, form, table, modal, sidebar, ...)",
+  "   - Thanh phan chinh (header, sidebar, card, button, input, table, pagination, ...)",
+  "   - Bo cuc & luong diem (grid, columns, navigation flow, huong doc)",
+  "   - Mau sac chu dao & phong cach (dark/light, primary/secondary/accent, density)",
+  "   - Trang thai thanh phan (active, disabled, hover, error, loading, selected)",
+  "3) DE XUAT NGAN GON: 2-3 diem can thiet neu ap dung vao he thong cua minh",
+  "",
+  "QUAN TRONG: Chi phan tich anh giao dien. KHONG tra loi cau hoi khac. KHONG binh luan ngoai pham vi UI/UX.",
 ].join("\n");
 
 // ── In-memory vision description cache ──────────────────────────────────────────
@@ -115,7 +147,7 @@ function hashImageUrl(url) {
   return "url:" + sha256Hex(url);
 }
 
-function buildVisionCacheKey(visionModel, imageBlocks) {
+function buildVisionCacheKey(visionModel, imageBlocks, instructionMode) {
   const imageHashes = [];
   for (const block of imageBlocks || []) {
     const url = imageUrlFromBlock(block);
@@ -124,9 +156,14 @@ function buildVisionCacheKey(visionModel, imageBlocks) {
     imageHashes.push(hash);
   }
   if (imageHashes.length === 0) return null;
+  // instructionMode distinguishes standard OCR+caption descriptions from
+  // UI/UX design-context descriptions, so toggling the override regenerates
+  // with the right prompt instead of serving the wrong cached text.
+  const mode = instructionMode === "uiux" ? "uiux" : "standard";
   return [
     "vision-description",
     VISION_INSTRUCTION_VERSION,
+    mode,
     visionModel || VISION_MODEL_DEFAULT,
     ...imageHashes,
   ].join("|");
@@ -237,9 +274,10 @@ async function extractImagesFromMessage(msg, log) {
   return imageBlocks;
 }
 
-function buildVisionRequestFromImages(imageBlocks) {
+function buildVisionRequestFromImages(imageBlocks, instructionMode, maxTokens) {
   if (!imageBlocks?.length) return null;
-  return {
+  const instruction = instructionMode === "uiux" ? VISION_INSTRUCTION_UIUX : VISION_INSTRUCTION;
+  const request = {
     // Use streaming for vision loopback. Heavy image prompts can take long enough
     // that non-streaming providers/proxies time out before the first byte.
     stream: true,
@@ -247,11 +285,18 @@ function buildVisionRequestFromImages(imageBlocks) {
     messages: [{
       role: "user",
       content: [
-        { type: "text", text: VISION_INSTRUCTION },
+        { type: "text", text: instruction },
         ...imageBlocks,
       ],
     }],
   };
+  // Inject max_tokens budget when provided. UI/UX override always forces the
+  // richer VISION_MAX_TOKENS_UIUX so the design analysis isn't truncated.
+  const budget = instructionMode === "uiux"
+    ? VISION_MAX_TOKENS_UIUX
+    : (Number.isFinite(maxTokens) && maxTokens > 0 ? maxTokens : null);
+  if (budget) request.max_tokens = budget;
+  return request;
 }
 
 function parseVisionSSEToOpenAIResponse(rawSSE, fallbackModel) {
@@ -480,6 +525,15 @@ export async function preprocessVisionContent(body, settings, log, targetCaps, o
     return null;
   }
 
+  // Vision Bridge: choose instruction mode + token budget from settings.
+  // uiUxOverride swaps the OCR+caption prompt for a structured UI/UX design
+  // analysis and forces a richer max_tokens budget (4096). maxTokens only
+  // applies to the standard instruction mode; the override always wins.
+  const uiUxOverride = settings?.visionUiUxOverride === true;
+  const instructionMode = uiUxOverride ? "uiux" : "standard";
+  const rawMaxTokens = Number(settings?.visionMaxTokens);
+  const maxTokens = Number.isFinite(rawMaxTokens) && rawMaxTokens > 0 ? rawMaxTokens : VISION_MAX_TOKENS_DEFAULT;
+
   // Skip if target model IS the vision model (it can handle images natively)
   const visionModelId = visionModel.split("/").slice(1).join("/");
   if (body.model === visionModel || body.model === visionModelId) {
@@ -516,7 +570,7 @@ export async function preprocessVisionContent(body, settings, log, targetCaps, o
     try {
       const oldBlocks = await extractImagesFromMessage(msg, log);
       if (oldBlocks.length) {
-        const oldKey = buildVisionCacheKey(visionModel, oldBlocks);
+        const oldKey = buildVisionCacheKey(visionModel, oldBlocks, instructionMode);
         const oldCached = getCachedVisionDescription(oldKey);
         if (oldCached) {
           messages[mi] = stripImagesFromMessage(msg, "[Image description: " + oldCached + "]");
@@ -556,7 +610,7 @@ export async function preprocessVisionContent(body, settings, log, targetCaps, o
     return null;
   }
 
-  const cacheKey = buildVisionCacheKey(visionModel, imageBlocks);
+  const cacheKey = buildVisionCacheKey(visionModel, imageBlocks, instructionMode);
   const cachedVisionText = getCachedVisionDescription(cacheKey);
   if (cachedVisionText) {
     messages[lastUserIdx] = stripImagesFromMessage(lastMsg, "[Image description: " + cachedVisionText + "]");
@@ -564,7 +618,7 @@ export async function preprocessVisionContent(body, settings, log, targetCaps, o
     return body;
   }
 
-  const visionBody = buildVisionRequestFromImages(imageBlocks);
+  const visionBody = buildVisionRequestFromImages(imageBlocks, instructionMode, maxTokens);
   if (!visionBody) {
     log?.warn?.("VISION", "No valid images to preprocess");
     return null;
