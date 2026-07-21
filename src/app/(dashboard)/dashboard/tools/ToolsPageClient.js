@@ -3,9 +3,11 @@
 import { useState, useEffect, useCallback } from "react";
 import { Card, CardSkeleton, Toggle, Select } from "@/shared/components";
 
-// Free vision models available on the opencode-go provider. The backend
-// allowlist in /api/settings must stay in sync with this list.
+// Free vision models available on the opencode-go provider, plus a special
+// "combo:vision" option that reads the model from the "vision" combo in the
+// Combos tab — so the user manages the vision model in one place.
 const VISION_MODEL_OPTIONS = [
+  { value: "combo:vision", label: "Combo: vision (tự động theo combo)" },
   { value: "oc/mimo-v2.5-free", label: "Mimo V2.5 (Free)" },
   { value: "oc/deepseek-v4-flash-free", label: "DeepSeek V4 Flash (Free)" },
   { value: "oc/glm-5.2", label: "GLM 5.2" },
@@ -23,7 +25,7 @@ export default function ToolsPageClient() {
   const [error, setError] = useState("");
 
   const [visionPreprocessingEnabled, setVisionPreprocessingEnabled] = useState(true);
-  const [visionPreprocessingModel, setVisionPreprocessingModel] = useState("oc/mimo-v2.5-free");
+  const [visionPreprocessingModel, setVisionPreprocessingModel] = useState("combo:vision");
   const [visionMaxTokens, setVisionMaxTokens] = useState(1024);
   const [visionUiUxOverride, setVisionUiUxOverride] = useState(false);
 
@@ -35,7 +37,7 @@ export default function ToolsPageClient() {
       if (!res.ok) throw new Error("Failed to load settings");
       const data = await res.json();
       setVisionPreprocessingEnabled(data.visionPreprocessingEnabled !== false);
-      setVisionPreprocessingModel(data.visionPreprocessingModel || "oc/mimo-v2.5-free");
+      setVisionPreprocessingModel(data.visionPreprocessingModel || "combo:vision");
       setVisionMaxTokens(
         typeof data.visionMaxTokens === "number" ? data.visionMaxTokens : 1024
       );
@@ -83,7 +85,7 @@ export default function ToolsPageClient() {
   };
 
   const handleModel = async (event) => {
-    const value = event?.target?.value || "oc/mimo-v2.5-free";
+    const value = event?.target?.value || "combo:vision";
     // Defensive: only accept models from the allowlist.
     const safe = VISION_MODEL_OPTIONS.some((o) => o.value === value)
       ? value
@@ -160,7 +162,7 @@ export default function ToolsPageClient() {
               value={visionPreprocessingModel}
               onChange={handleModel}
               options={VISION_MODEL_OPTIONS}
-              hint="Chọn model vision miễn phí. DeepSeek V4 Flash nhanh và ổn định nhất."
+              hint="Combo: vision tự động theo model trong tab Combos. Hoặc chọn model cụ thể."
               disabled={saving}
             />
             <Select
@@ -192,7 +194,7 @@ export default function ToolsPageClient() {
         <ul className="flex flex-col gap-2 text-sm text-text-muted">
           <li>• Khi model đích không hỗ trợ ảnh, Vision Bridge gọi model vision qua loopback để tạo mô tả text, rồi thay ảnh bằng mô tả đó.</li>
           <li>• Kết quả được cache 6 giờ theo model + chế độ prompt, nên toggle UI/UX sẽ sinh mô tả mới thay vì dùng cache cũ.</li>
-          <li>• Model vision mặc định là mimo-v2.5-free. Có thể đổi sang DeepSeek V4 Flash hoặc GLM 5.2 nếu mimo chậm/lỗi.</li>
+          <li>• Model vision mặc định theo combo "vision" trong tab Combos — đổi combo là Vision Bridge tự theo. Cũng có thể chọn model cụ thể.</li>
         </ul>
       </Card>
     </div>

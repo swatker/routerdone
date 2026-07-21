@@ -22,6 +22,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { getComboByName } from "@/lib/localDb";
 
 const VISION_MODEL_DEFAULT = "oc/mimo-v2.5-free";
 
@@ -546,7 +547,29 @@ export async function preprocessVisionContent(body, settings, log, targetCaps, o
     return null;
   }
 
-  const visionModel = settings?.visionPreprocessingModel || VISION_MODEL_DEFAULT;
+  let visionModel = settings?.visionPreprocessingModel || VISION_MODEL_DEFAULT;
+
+  // "combo:<name>" resolves to the first model in the named combo, so the
+  // user can manage the vision model from the Combos tab without touching
+  // Tools. Falls back to VISION_MODEL_DEFAULT if the combo is missing or empty.
+  if (visionModel.startsWith("combo:")) {
+    const comboName = visionModel.slice("combo:".length);
+    try {
+      const combo = await getComboByName(comboName);
+      const models = combo?.models;
+      if (Array.isArray(models) && models.length > 0 && models[0].includes("/")) {
+        log?.info?.("VISION", "Resolved combo:" + comboName + " → " + models[0]);
+        visionModel = models[0];
+      } else {
+        log?.warn?.("VISION", "Combo '" + comboName + "' has no valid models, falling back to " + VISION_MODEL_DEFAULT);
+        visionModel = VISION_MODEL_DEFAULT;
+      }
+    } catch (err) {
+      log?.warn?.("VISION", "Failed to resolve combo '" + comboName + "': " + err.message);
+      visionModel = VISION_MODEL_DEFAULT;
+    }
+  }
+
   if (!visionModel.includes("/")) {
     log?.warn?.("VISION", "Invalid vision model string: " + visionModel);
     return null;

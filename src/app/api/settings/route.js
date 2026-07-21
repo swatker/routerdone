@@ -58,6 +58,7 @@ export async function PATCH(request) {
     }
     if (Object.prototype.hasOwnProperty.call(body, "visionPreprocessingModel")) {
       const allowedVisionModels = [
+        "combo:vision",
         "oc/mimo-v2.5-free",
         "oc/deepseek-v4-flash-free",
         "oc/glm-5.2",
