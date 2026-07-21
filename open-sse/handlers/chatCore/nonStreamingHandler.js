@@ -166,7 +166,10 @@ function hasProductiveResponse(body) {
   }
   const parts = body.candidates?.[0]?.content?.parts || body.response?.candidates?.[0]?.content?.parts;
   if (Array.isArray(parts) && parts.some((p) => typeof p.text === "string" && p.text.length > 0 || p.functionCall)) return true;
-  return false;
+  // If the response has valid structure (choices with message object),
+  // consider it productive even if content fields are empty.
+  // Reasoning models may consume all tokens for internal thinking.
+  return !!choice;
 }
 
 /**

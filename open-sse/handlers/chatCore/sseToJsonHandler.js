@@ -116,7 +116,10 @@ function hasProductiveJsonResponse(body) {
   if (Array.isArray(body.output)) {
     return body.output.some((o) => o?.type === "function_call" || (Array.isArray(o.content) && o.content.some((c) => typeof c?.text === "string" && c.text.length > 0)));
   }
-  return false;
+  // If the response has valid structure (choices with message object),
+  // consider it productive even if content fields are empty.
+  // Reasoning models may consume all tokens for internal thinking.
+  return !!choice;
 }
 
 /**
