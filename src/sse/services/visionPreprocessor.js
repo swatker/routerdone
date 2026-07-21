@@ -24,15 +24,32 @@
 import { createHash } from "node:crypto";
 
 const VISION_MODEL_DEFAULT = "oc/mimo-v2.5-free";
-const VISION_TIMEOUT_MS = 30000;
+
+// Parse a positive integer env override, falling back to a default.
+// Mirrors the envMs helper in open-sse/config/runtimeConfig.js so these
+// ceilings stay tunable from docker-compose without a rebuild.
+function envMs(name, def) {
+  const raw = process.env[name];
+  if (raw == null || raw === "") return def;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : def;
+}
+
+// Bumped 30s -> 60s after 24h of production logs showed mimo-v2.5-free
+// consistently takes 15-25s+ to emit an image description (sometimes 30s+),
+// and the original 30s ceiling aborted ~62% of calls (10/16). The inline
+// comment "mimo is fast (3-8s measured)" below was misleading — it measured
+// tiny test images, not real screenshots. 60s gives headroom while still
+// bounding a stuck upstream. Env: VISION_TIMEOUT_MS.
+const VISION_TIMEOUT_MS = envMs("VISION_TIMEOUT_MS", 60000);
 // Reasoning-capable vision models can spend their budget on a thinking pass
 // before emitting the description, so give them a longer ceiling (matches the
 // combo reasoning stream tier). Used only when the resolved vision model caps
-// declare reasoning: true.
-const VISION_REASONING_TIMEOUT_MS = 60000;
-// One retry on a failed/empty vision call — mimo is fast (3-8s measured), so a
-// single retry cheaply recovers transient upstream/network blips before we fall
-// back to a placeholder.
+// declare reasoning: true. Env: VISION_REASONING_TIMEOUT_MS.
+const VISION_REASONING_TIMEOUT_MS = envMs("VISION_REASONING_TIMEOUT_MS", 60000);
+// One retry on a failed/empty vision call. Real-world latency is 15-25s per
+// attempt, so a single retry costs up to ~60s before we fall back to a
+// placeholder — acceptable since the alternative is no image context at all.
 const VISION_MAX_ATTEMPTS = 2;
 // Bumped v1 -> v2 when Vision Bridge introduced the UI/UX Design Context
 // Override instruction mode + per-request max_tokens budget. Old cache entries
