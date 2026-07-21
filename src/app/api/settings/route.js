@@ -51,18 +51,20 @@ export async function PATCH(request) {
     }
 
     // Vision Bridge (Tools tab) — validate the 4 settings surfaced in the UI.
-    // The vision model is hard-pinned to oc/mimo-v2.5-free (the only free
-    // vision model). We never accept a paid vision model string here, so the
-    // toggle can't be used to route vision spend through Claude/Gemini/GPT.
+    // Only free-tier vision models are allowed so the toggle can't be used to
+    // route vision spend through paid Claude/Gemini/GPT endpoints.
     if (Object.prototype.hasOwnProperty.call(body, "visionPreprocessingEnabled")) {
       body.visionPreprocessingEnabled = body.visionPreprocessingEnabled === true;
     }
     if (Object.prototype.hasOwnProperty.call(body, "visionPreprocessingModel")) {
-      const allowedVisionModels = ["oc/mimo-v2.5-free"];
+      const allowedVisionModels = [
+        "oc/mimo-v2.5-free",
+        "oc/deepseek-v4-flash-free",
+        "oc/glm-5.2",
+      ];
       if (!allowedVisionModels.includes(body.visionPreprocessingModel)) {
-        return NextResponse.json({ error: "Vision model is pinned to oc/mimo-v2.5-free (free tier only)" }, { status: 400 });
+        return NextResponse.json({ error: "Vision model must be a free-tier model" }, { status: 400 });
       }
-      body.visionPreprocessingModel = "oc/mimo-v2.5-free";
     }
     if (Object.prototype.hasOwnProperty.call(body, "visionMaxTokens")) {
       const allowedBudgets = [1024, 2048, 4096];

@@ -3,12 +3,12 @@
 import { useState, useEffect, useCallback } from "react";
 import { Card, CardSkeleton, Toggle, Select } from "@/shared/components";
 
-// Vision model is hard-pinned to the only free vision model available on this
-// router (oc/mimo-v2.5-free). Paid vision models (Claude/Gemini/GPT) must never
-// appear here — the backend allowlist rejects them, and the UI must not offer
-// them either. If a free vision model is added later, extend this array.
+// Free vision models available on the opencode-go provider. The backend
+// allowlist in /api/settings must stay in sync with this list.
 const VISION_MODEL_OPTIONS = [
   { value: "oc/mimo-v2.5-free", label: "Mimo V2.5 (Free)" },
+  { value: "oc/deepseek-v4-flash-free", label: "DeepSeek V4 Flash (Free)" },
+  { value: "oc/glm-5.2", label: "GLM 5.2" },
 ];
 
 const VISION_MAX_TOKENS_OPTIONS = [
@@ -84,10 +84,10 @@ export default function ToolsPageClient() {
 
   const handleModel = async (event) => {
     const value = event?.target?.value || "oc/mimo-v2.5-free";
-    // Defensive: never accept anything but the pinned free vision model.
+    // Defensive: only accept models from the allowlist.
     const safe = VISION_MODEL_OPTIONS.some((o) => o.value === value)
       ? value
-      : "oc/mimo-v2.5-free";
+      : VISION_MODEL_OPTIONS[0].value;
     const prev = visionPreprocessingModel;
     setVisionPreprocessingModel(safe);
     const ok = await patchSetting({ visionPreprocessingModel: safe });
@@ -149,7 +149,7 @@ export default function ToolsPageClient() {
               checked={visionPreprocessingEnabled}
               onChange={handleEnabled}
               label="Enable Vision Polyfill"
-              description="Khi bật, ảnh trong request sẽ được mimo-v2.5-free mô tả trước khi gửi tới model đích không hỗ trợ vision. Tắt để truyền ảnh nguyên bản (model đích có thể từ chối)."
+              description="Khi bật, ảnh trong request sẽ được model vision mô tả trước khi gửi tới model đích không hỗ trợ vision. Tắt để truyền ảnh nguyên bản (model đích có thể từ chối)."
               disabled={saving}
             />
           </div>
@@ -160,7 +160,7 @@ export default function ToolsPageClient() {
               value={visionPreprocessingModel}
               onChange={handleModel}
               options={VISION_MODEL_OPTIONS}
-              hint="Khóa vào model vision miễn phí duy nhất."
+              hint="Chọn model vision miễn phí. DeepSeek V4 Flash nhanh và ổn định nhất."
               disabled={saving}
             />
             <Select
@@ -190,9 +190,9 @@ export default function ToolsPageClient() {
 
       <Card icon="info" title="Cách hoạt động" padding="md">
         <ul className="flex flex-col gap-2 text-sm text-text-muted">
-          <li>• Khi model đích không hỗ trợ ảnh, Vision Bridge gọi mimo-v2.5-free qua loopback để tạo mô tả text, rồi thay ảnh bằng mô tả đó.</li>
+          <li>• Khi model đích không hỗ trợ ảnh, Vision Bridge gọi model vision qua loopback để tạo mô tả text, rồi thay ảnh bằng mô tả đó.</li>
           <li>• Kết quả được cache 6 giờ theo model + chế độ prompt, nên toggle UI/UX sẽ sinh mô tả mới thay vì dùng cache cũ.</li>
-          <li>• Vision model luôn là mimo-v2.5-free (free tier) — không có tùy chọn trả phí.</li>
+          <li>• Model vision mặc định là mimo-v2.5-free. Có thể đổi sang DeepSeek V4 Flash hoặc GLM 5.2 nếu mimo chậm/lỗi.</li>
         </ul>
       </Card>
     </div>
