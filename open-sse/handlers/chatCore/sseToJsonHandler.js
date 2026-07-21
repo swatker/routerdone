@@ -110,6 +110,8 @@ function hasProductiveJsonResponse(body) {
   const msg = choice?.message || choice?.delta || {};
   if (typeof msg.content === "string" && msg.content.length > 0) return true;
   if (typeof msg.reasoning_content === "string" && msg.reasoning_content.length > 0) return true;
+  // Some providers (e.g. opencode.ai) return reasoning text in `reasoning` instead of `reasoning_content`
+  if (typeof msg.reasoning === "string" && msg.reasoning.length > 0) return true;
   if (Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) return true;
   if (Array.isArray(body.output)) {
     return body.output.some((o) => o?.type === "function_call" || (Array.isArray(o.content) && o.content.some((c) => typeof c?.text === "string" && c.text.length > 0)));

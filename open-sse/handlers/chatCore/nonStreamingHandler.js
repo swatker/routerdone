@@ -155,6 +155,8 @@ function hasProductiveResponse(body) {
   // [{ type:"text", text:"hello" }] — each is a productive response.
   if (Array.isArray(msg.content) && msg.content.some((b) => typeof b?.text === "string" && b.text.length > 0)) return true;
   if (typeof msg.reasoning_content === "string" && msg.reasoning_content.length > 0) return true;
+  // Some providers (e.g. opencode.ai) return reasoning text in `reasoning` instead of `reasoning_content`
+  if (typeof msg.reasoning === "string" && msg.reasoning.length > 0) return true;
   if (typeof msg.refusal === "string" && msg.refusal.length > 0) return true;
   if (Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) return true;
   if (typeof choice?.text === "string" && choice.text.length > 0) return true;
