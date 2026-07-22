@@ -7,8 +7,9 @@ import { parseResetAfterText, parseRetryAfterHeader, unavailableResponse } from 
 import { isImmediateFallbackStatus, isRetryableTransientStatus, resolveRoutePolicy } from "./routePolicy.js";
 import { getCapabilitiesForModel } from "../providers/capabilities.js";
 import { extractTextContent } from "../translator/formats/gemini.js";
-import { MODEL_FAILURE_BACKOFF_MAX_MS } from "../config/errorConfig.js";
+import { MODEL_FAILURE_BACKOFF_MAX_MS, PROVIDER_SELF_HEAL_COOLDOWN_MS_DEFAULT } from "../config/errorConfig.js";
 import { COMBO_REASONING_STREAM_FIRST_PRODUCTIVE_TIMEOUT_MS } from "../config/runtimeConfig.js";
+import { parseSSEToOpenAIResponse } from "../handlers/chatCore/sseToJsonHandler.js";
 
 // Hard capabilities = input modalities; missing one drops request data (e.g. image
 // stripped). Must be prioritized. Soft (e.g. search) only degrades a feature.
@@ -35,16 +36,44 @@ const consoleTimeFormatter = new Intl.DateTimeFormat("sv-SE", {
 function isSlowReasoningAttempt(body, modelStr) {
   const effort = String(body?.reasoning_effort || body?.reasoning?.effort || "").toLowerCase();
   const model = String(modelStr || "").toLowerCase();
-  return ["high", "xhigh"].includes(effort) || /(?:thinking|reasoning|xhigh)/i.test(model);
+  if (["high", "xhigh"].includes(effort) || /(?:thinking|reasoning|xhigh)/i.test(model)) return true;
+  // Also honor the model's declared reasoning capability. Names like
+  // "grok-4.5" / "glm-5.1" / "deepseek-v4-flash" carry no reasoning keyword and
+  // clients often omit reasoning_effort, yet these models prefill slowly. Read
+  // the capability flag so they get the longer reasoning timeout instead of the
+  // 9s combo default (root cause of ttft=0 aborts at ~12s).
+  const slash = typeof modelStr === "string" ? modelStr.indexOf("/") : -1;
+  const provider = slash > 0 ? modelStr.slice(0, slash) : "";
+  const modelId = slash > 0 ? modelStr.slice(slash + 1) : modelStr;
+  try {
+    const caps = getCapabilitiesForModel(provider, modelId);
+    if (caps?.reasoning === true) return true;
+  } catch { /* capability lookup best-effort; fall through to false */ }
+  return false;
 }
 
-function withModelStreamPolicy(baseStreamPolicy, body, modelStr) {
+function withModelStreamPolicy(baseStreamPolicy, body, modelStr, hasFallback = false) {
   if (!isSlowReasoningAttempt(body, modelStr)) return baseStreamPolicy;
+  // Reasoning models get the full reasoning cap REGARDLESS of combo position.
+  //
+  // Earlier this tightened non-final attempts back to the ~9s combo default to
+  // abandon "dead" reasoning models quickly. But the deadline that fires here is
+  // headersDeadlineMs (firstByte + firstProductive), which aborts BEFORE any
+  // upstream headers arrive — and at that point a genuinely-hung model is
+  // indistinguishable from a healthy one still prefilling a large context. On
+  // real Claude Code traffic (100k+ tokens) deepseek-v4-pro at combo position
+  // 2/3 needs >9s just to return headers, so the old tightening aborted a
+  // perfectly alive model at exactly 12s (3s + 9s) -> "Upstream headers timeout"
+  // 502. Fast-failing upstreams (429/connection errors) are NOT timeouts and
+  // still fall through immediately, so always granting the long cap costs
+  // nothing on the common failure paths.
+  const policyCap = COMBO_REASONING_STREAM_FIRST_PRODUCTIVE_TIMEOUT_MS;
+  if (policyCap == null) return baseStreamPolicy;
   return {
     ...baseStreamPolicy,
     firstProductiveTimeoutMs: Math.max(
       baseStreamPolicy?.firstProductiveTimeoutMs || 0,
-      COMBO_REASONING_STREAM_FIRST_PRODUCTIVE_TIMEOUT_MS,
+      policyCap,
     ),
   };
 }
@@ -91,6 +120,21 @@ function markComboCooldown(modelStr) {
   return until;
 }
 
+// Short fixed cooldown for self-heal errors (empty stream, headers timeout,
+// provider-surface issues). Unlike markComboCooldown, this does NOT bump the
+// exponential failure counter — the provider is expected to recover quickly
+// and should not be deprioritized for long. Pattern borrowed from OmniRoute's
+// comboCooldownRetry classification: transient errors get a short window,
+// permanent errors get exponential backoff.
+function markComboSelfHealCooldown(modelStr) {
+  const now = Date.now();
+  const until = now + PROVIDER_SELF_HEAL_COOLDOWN_MS_DEFAULT;
+  comboModelCooldowns.set(modelStr, until);
+  // Do NOT touch comboModelFailures — counter stays at current value so the
+  // next real failure still starts fresh at the base window.
+  return until;
+}
+
 // Clear a model's cooldown + consecutive-failure counter after a successful
 // call, so its next failure starts back at the base window.
 function resetComboModelFailure(modelStr) {
@@ -122,15 +166,6 @@ function isPreflightTimeoutText(errorText) {
 }
 function isAuthLockedComboError(errorBody) {
   return errorBody?.error?.comboCooldownReason === "auth_model_locked" || errorBody?.error?.code === "all_accounts_locked";
-}
-
-async function isAuthLockedComboResponse(response) {
-  if (!response) return false;
-  try {
-    return isAuthLockedComboError(await response.clone().json());
-  } catch {
-    return false;
-  }
 }
 
 // Flatten tool turns into prose so panel models keep the context but can't loop
@@ -434,7 +469,8 @@ export async function handleComboChat({ body, models, handleSingleModel, log, co
       break;
     }
     const modelStr = rotatedModels[i];
-    const modelStreamPolicy = withModelStreamPolicy(policy.stream, body, modelStr);
+    const hasFallback = i < rotatedModels.length - 1;
+    const modelStreamPolicy = withModelStreamPolicy(policy.stream, body, modelStr, hasFallback);
     summary.tried++;
     log.info("COMBO", `${comboLogPrefix} | Trying model ${i + 1}/${rotatedModels.length}: ${modelStr}`);
 
@@ -455,14 +491,7 @@ export async function handleComboChat({ body, models, handleSingleModel, log, co
           streamPreflightTimeoutMs: modelStreamPolicy.firstProductiveTimeoutMs,
         });
 
-        // Locked-model responses are terminal for this model; retrying re-enters the same locked path and creates a retry storm.
-        const authLocked = isTransientComboStatus(result.status)
-          ? await isAuthLockedComboResponse(result)
-          : false;
-        if (result.ok || isImmediateFallbackStatus(result.status) || authLocked || !isTransientComboStatus(result.status) || attempt >= retryAttempts) {
-          if (authLocked && attempt < retryAttempts) {
-            log.info("COMBO", `${comboLogPrefix} | Model ${modelStr} auth/model locked, skip retry and try next model`);
-          }
+        if (result.ok || isImmediateFallbackStatus(result.status) || !isTransientComboStatus(result.status) || attempt >= retryAttempts) {
           break;
         }
 
@@ -506,7 +535,7 @@ export async function handleComboChat({ body, models, handleSingleModel, log, co
       }
 
       // Check if should fallback to next model
-      const { shouldFallback, cooldownMs } = checkFallbackError(result.status, errorText);
+      const { shouldFallback, cooldownMs, selfHeal } = checkFallbackError(result.status, errorText);
 
       if (!shouldFallback) {
         summary.failed++;
@@ -517,10 +546,14 @@ export async function handleComboChat({ body, models, handleSingleModel, log, co
 
       const cooldownReason = isAuthLockedComboError(errorBody)
         ? "auth_model_locked"
-        : isPreflightTimeoutText(errorText)
-          ? "preflight_timeout"
-          : "fallback_error";
-      const cooldownUntil = markComboCooldown(modelStr);
+        : selfHeal
+          ? "self_heal"
+          : isPreflightTimeoutText(errorText)
+            ? "preflight_timeout"
+            : "fallback_error";
+      const cooldownUntil = selfHeal
+        ? markComboSelfHealCooldown(modelStr)
+        : markComboCooldown(modelStr);
       if (cooldownUntil) {
         log.warn("COMBO", `${comboLogPrefix} | cooldown model=${modelStr} until=${formatConsoleTimeGmt7(cooldownUntil)} reason=${cooldownReason}`, { status: result.status, cooldownMs });
       }
@@ -577,6 +610,7 @@ function extractPanelText(json) {
     const msg = choice.message ?? choice.delta ?? {};
     const t = extractTextContent(msg.content);
     if (t.trim()) return t;
+    if (typeof msg.reasoning_content === "string" && msg.reasoning_content.trim()) return msg.reasoning_content;
     if (typeof choice.text === "string" && choice.text.trim()) return choice.text;
   }
 
@@ -600,6 +634,15 @@ function extractPanelText(json) {
   }
 
   return "";
+}
+
+async function readPanelResponseJSON(res, model) {
+  const contentType = res.headers?.get?.("content-type") || "";
+  if (contentType.includes("text/event-stream")) {
+    const rawSSE = await res.clone().text();
+    return parseSSEToOpenAIResponse(rawSSE, model);
+  }
+  return res.clone().json();
 }
 
 /**
@@ -753,9 +796,11 @@ export async function handleFusionChat({ body, models, handleSingleModel, log, c
   const judge = judgeModel && judgeModel.trim() ? judgeModel.trim() : panel[0];
   log.info("FUSION", `Combo "${comboName}" | panel=${panel.length} [${panel.join(", ")}] | judge=${judge} | quorum=${minPanel}`);
 
-  // 1. Fan out to the panel in parallel: non-streaming, tools stripped (we want prose).
+  // 1. Fan out to the panel in parallel. Use streaming so heavy panel prompts
+  // produce bytes early instead of timing out as non-streaming requests. Panel
+  // responses are normalized back to JSON before extractPanelText below.
   const { tools, tool_choice, ...rest } = body;
-  const panelBody = { ...rest, stream: false };
+  const panelBody = { ...rest, stream: true };
 
   // Flatten tool turns to prose so panel models keep context without emitting tool_calls.
   if (Array.isArray(panelBody.messages)) {
@@ -789,7 +834,7 @@ export async function handleFusionChat({ body, models, handleSingleModel, log, c
     if (res.__error) { log.warn("FUSION", `Panel ${model} threw`, { error: res.__error?.message || String(res.__error) }); continue; }
     if (!res.ok) { log.warn("FUSION", `Panel ${model} failed`, { status: res.status }); continue; }
     try {
-      const json = await res.clone().json();
+      const json = await readPanelResponseJSON(res, model);
       const text = extractPanelText(json);
       if (text) {
         answers.push({ model, text, response: res });

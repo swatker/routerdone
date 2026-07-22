@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { guardContext, formatContextGuardLog, estimateInputTokens, pruneContextToHardCap, formatHardCapPruneLog } from "../../open-sse/rtk/contextGuard.js";
+import { guardContext, formatContextGuardLog, estimateInputTokens, pruneContextToHardCap, formatHardCapPruneLog, sanitizeTrimmedMediaBlocks } from "../../open-sse/rtk/contextGuard.js";
 import { countRequestTokens } from "../../open-sse/utils/tokenEstimate.js";
 
 // Build a reasoning item with a sized encrypted_content blob.
@@ -278,6 +278,80 @@ describe("pruneContextToHardCap", () => {
     expect(body.input[1].content).toContain("[trimmed by RouterDone context guard]");
     expect(body.input[3].content).toBe("recent assistant");
     expect(body.input[4].content).toBe("recent user");
+  });
+
+  it("replaces old media blocks instead of trimming inside image data URLs", () => {
+    const body = {
+      messages: [
+        { role: "user", content: [
+          { type: "text", text: "old screenshot" },
+          { type: "image_url", image_url: { url: `data:image/png;base64,${"A".repeat(20_000)}` } },
+        ] },
+        { role: "assistant", content: "recent assistant" },
+        { role: "user", content: "recent user" },
+      ],
+    };
+    const before = estimateInputTokens(body, "gpt-5");
+    const hardCapTokens = Math.max(1, Math.floor(before * 0.4));
+
+    const stats = pruneContextToHardCap(body, { hardCapTokens, keepRecent: 2, model: "gpt-5" });
+
+    expect(stats.trimmedMediaBlocks).toBe(1);
+    expect(body.messages[0].content[1]).toEqual({
+      type: "text",
+      text: "[image omitted by RouterDone context guard]",
+    });
+    expect(JSON.stringify(body)).not.toContain("[trimmed by RouterDone context guard]");
+    expect(JSON.stringify(body)).not.toContain("data:image/png;base64");
+  });
+
+  it("sanitizes media blocks that were already trimmed by older builds", () => {
+    const body = {
+      messages: [
+        { role: "user", content: [
+          { type: "text", text: "old screenshot" },
+          { type: "image_url", image_url: { url: `data:image/png;base64,AAAA\n[trimmed by RouterDone context guard] (100 chars removed)` } },
+        ] },
+        { role: "user", content: "alo" },
+      ],
+    };
+
+    const stats = sanitizeTrimmedMediaBlocks(body);
+
+    expect(stats.sanitizedMediaBlocks).toBe(1);
+    expect(body.messages[0].content[1]).toEqual({
+      type: "text",
+      text: "[image omitted by RouterDone context guard]",
+    });
+  });
+
+  it("does not sanitize valid media blocks", () => {
+    const imageUrl = "data:image/png;base64,AAAA";
+    const body = {
+      messages: [
+        { role: "user", content: [{ type: "image_url", image_url: { url: imageUrl } }] },
+      ],
+    };
+
+    expect(sanitizeTrimmedMediaBlocks(body)).toBeNull();
+    expect(body.messages[0].content[0].image_url.url).toBe(imageUrl);
+  });
+
+  it("keeps recent media blocks intact when pruning old context", () => {
+    const imageUrl = `data:image/png;base64,${"A".repeat(20_000)}`;
+    const body = {
+      messages: [
+        { role: "user", content: "old " + "x".repeat(20_000) },
+        { role: "assistant", content: "recent assistant" },
+        { role: "user", content: [{ type: "image_url", image_url: { url: imageUrl } }] },
+      ],
+    };
+    const before = estimateInputTokens(body, "gpt-5");
+    const hardCapTokens = Math.max(1, Math.floor(before * 0.6));
+
+    pruneContextToHardCap(body, { hardCapTokens, keepRecent: 2, model: "gpt-5" });
+
+    expect(body.messages[2].content[0].image_url.url).toBe(imageUrl);
   });
 
   it("preserves Responses and Chat image URLs byte-for-byte", () => {
